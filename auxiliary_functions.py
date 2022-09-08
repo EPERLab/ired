@@ -5,8 +5,6 @@ from builtins import str
 from builtins import range
 import os
 import numpy as np
-from qgis.core import QgsVectorDataProvider
-from qgis.core import QgsField
 import glob
 import csv
 import collections
@@ -22,11 +20,21 @@ from PyQt5.QtCore import *
 from qgis.core import *
 from qgis.utils import iface
 """
-from .Harmonics import weighted_choice
+
 from PyQt5.QtWidgets import QMessageBox
 import sys
 import re
 import traceback
+
+def weighted_choice(choices):  #
+    total = sum(w for c, w in choices)
+    r = random.uniform(0, total)
+    upto = 0
+    for c, w in choices:
+        if upto + w >= r:
+            return c
+        upto += w
+    assert False
 
 
 def natural_sort(l):  # sort list in alphanumeric order
@@ -98,13 +106,10 @@ def ReadLoadProfiles(self, perfilespath, dir_network, name_file_created):  # rea
         curves = [""]
         filenames = list()
         # open loadshapes file and read old path in first line
-        filename_ = dir_network + '/' + name_file_created.split('_')[0]
-        filename_ += '_LoadShapes.dss'
-        
-        with open(filename_, 'r') as file_object:
+        with open(dir_network + '/' + name_file_created.split('_')[0] + '_LoadShapes.dss', 'r') as file_object:
             filenames = file_object.readlines()
             old_path = filenames[0].replace('!', '').replace('\\', '/').replace('\n', '')
-            old_dir_profiles_gd = os.path.join(old_path, 'DG').replace('\\', '/')
+            old_dir_profiles_gd= os.path.join(old_path, 'DG').replace('\\', '/')
             if 'curvas' in old_path:
                 perfilespath = perfilespath.replace('profiles', 'curvas')
             dir_profiles_gd = os.path.join(perfilespath, 'DG')
@@ -112,14 +117,11 @@ def ReadLoadProfiles(self, perfilespath, dir_network, name_file_created):  # rea
         file_object.closed
     
         # replace old path with new for all lines list
-        print("filename_  = ", filename_)
-        print("old_path = ", old_path)
-        print("perfilespat = ", perfilespath)
         for i in range(len(filenames)):
             filenames[i] = str(filenames[i]).replace('\\', '/').replace(old_path, perfilespath).replace('/', '\\')
     
         # open loadshapes file and replace old path with new for all lines in file
-        with open(filename_ , 'w') as file_object:
+        with open(dir_network + '/' + name_file_created.split('_')[0] + '_LoadShapes.dss', 'w') as file_object:
             for loadshape in filenames:
                 file_object.write(loadshape.replace('\\', '/').replace(old_path, perfilespath).replace('/', '\\'))
     
@@ -130,7 +132,6 @@ def ReadLoadProfiles(self, perfilespath, dir_network, name_file_created):  # rea
                 file_object.writelines('New XYCurve.MyEff npts=4 xarray=[.1 .2 .4 1.0] yarray=[.86 .9 .93 .97]\n')
     
             # add PV profile and PV temp shapes if not in file
-            """
             if self.dlg.PV.isChecked():
                 try :
                     prof = open(old_dir_profiles_gd.replace('/', '\\') + '\\' + 'PVprofile.txt')
@@ -149,8 +150,7 @@ def ReadLoadProfiles(self, perfilespath, dir_network, name_file_created):  # rea
                     file_object.write('New Loadshape.MyIrrad npts=96 minterval=15 csvfile=' + dir_profiles_gd.replace('/', '\\')
                                       + '\\' + 'PVprofile.txt\n')  # normalized with 1.045180145 kW/m2
                     file_object.write('New Tshape.MyTemp npts=96 minterval=15 csvfile=' + dir_profiles_gd.replace('/', '\\')
-                                     + '\\' + 'PVtemp.txt\n')
-              """
+                                      + '\\' + 'PVtemp.txt\n')
         file_object.closed
     
         return curves
@@ -203,11 +203,8 @@ def ExtractVoltageData(DSScircuit, V_buses, Base_V, t): #FUNCIÓN MODIFICADA
     return V_buses
     
 
-def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it,
-				 P_to_be_matched, Q_to_be_matched, hora_sec,
-                 study, dir_network, tx_active, yearly_steps,
-                 firstLine, substation, line_tx_definition,
-                 gen_powers, gen_rpowers):
+def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it, P_to_be_matched, Q_to_be_matched, hora_sec,
+                 study, dir_network, tx_active, yearly_steps, firstLine, substation, line_tx_definition, gen_powers, gen_rpowers):
     """
     Load allocation algorithm
     :param errorP: maximum P error desired
@@ -228,6 +225,7 @@ def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it,
     :return: kW_corrector, kVAr_corrector arrays
     """
     try:
+
         # counter assignation according to study type
         if (study == 'snapshot') or (study == 'shortCircuit'):
             counter = 1
@@ -283,16 +281,6 @@ def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it,
         while errorQ_av > errorQ:  # and errorP_av > errorP:  # corrector iteration
             prog += 2
             DSSprogress.PctProgress = prog
-            #( "counter = ", int(counter),  ", len(DQ_to_be_matched) = ", len(DQ_to_be_matched) )
-            
-            """
-            if int(counter) != len(DQ_to_be_matched):            
-               QMessageBox.critical(None, QCoreApplication.translate('dialog', "Error"),
-                                            QCoreApplication.translate('dialog', u"El archivo de curvas de demanda no tiene la cantidad de datos necesaria para hacer el estudio solicitado "))
-                
-               return None, None, None, None, None, None, None
-            """
-            
     
             for t in range( int(counter) ): # corrector loop
                 if DP_to_be_matched[t] != 0:                    
@@ -313,6 +301,7 @@ def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it,
             DSStext.Command = 'clear'  # erase old circuits
             DSStext.Command = 'New Circuit.Circuito_Distribucion_Daily'  # create new circuit
             DSStext.Command = 'Compile ' + dir_network + '/Master.dss'  # Compila el archivo master de OpenDSS
+            DSStext.Command = 'batchedit generator.DERf_.* enabled = no' # No fictitious generators simulation
             if (study == 'daily') or (study == 'snapshot') or (study == 'shortCircuit'):
                 DSStext.Command = 'Set mode = daily'  # Define el tipo de simulacion a realizar (diaria en este caso)
             if study == 'yearly':
@@ -368,8 +357,11 @@ def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it,
         exc_info = sys.exc_info()
         print("\nError: ", exc_info )
         print("*************************  Información detallada del error ********************")
+        
+        
         for tb in traceback.format_tb(sys.exc_info()[2]):
-            print(tb)
+            print(tb)      
+        
         return 0, 0, 0, 0, 0, 0, 0
     
     
