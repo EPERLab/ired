@@ -54,34 +54,7 @@ from qgis.core import QgsGraduatedSymbolRenderer
 from PyQt5.QtGui import QColor
 from qgis.utils import iface
 
-from .hc_functions import setUpCOMInterface
-from .hc_functions import loadFeederLoadCurve
-from .hc_functions import getbases
-from .hc_functions import base_Case_Run
-from .hc_functions import normalAmps
-from .hc_functions import getloadbuses
-from .hc_functions import getGDinstalled
-from .hc_functions import distance_nodes_MV
-from .hc_functions import trafos_and_DERs_text_command
-from .hc_functions import FF_BFC_Current, ReductionReach
-from .hc_functions import SympatheticTripping
-from .hc_functions import DERs_Run
-from .hc_functions import pq_voltage
-from .hc_functions import thermal_Lines_Tx
-from .hc_functions import pickle_dump
-from .hc_functions import pickle_load
-from .hc_functions import circuit_graph
-from .hc_functions import base_info_tx_and_mvloads
-from .hc_functions import base_info_lvloads
-from .hc_functions import DER_calc
-from .hc_functions import DER_allocation_HHC
-from .hc_functions import pDevices
-from .hc_functions import flag_and_blacklist_calc
-from .hc_functions import step_calc
-from .hc_functions import data_grouping
-from .hc_functions import data_grouping_iterative
-from .hc_functions import pickle
-from .hc_functions import save_criteria_data_iterative
+from .Hybrid_Iterative_Functions import *
 from . import auxiliary_functions as auxfcns
 
 pd.options.mode.chained_assignment = None
@@ -950,115 +923,17 @@ class ired:
     def create_master(self, dir_network, name_file_created,
                       tx_active, volt_nom):
         try:
+            name_circuit = name_file_created.split('_')[0]
             volt_nom = str(volt_nom)
             created_files = open(dir_network + '/' + name_file_created + '.dss', 'r')
             created_files = created_files.read()
-            lv_file = dir_network + '/' + name_file_created.split('_')[0]
-            lv_file += '_LinesMV.dss'
-            with open(lv_file, 'r+') as f:  # save file's original settings
-                original_lines = f.readlines()
-                f.close
 
-            firstLine = ""
-            name_lines_mv_new = ""
-            bus1 = ""
             if tx_active is False:
-                old_exp = name_file_created.split('_')[0] + '_LinesMV'
-                new_exp = name_file_created.split('_')[0] + '_LinesMV_mod'
-                name_lines_mv_new = new_exp
-                created_files = created_files.replace(old_exp, new_exp)
-                sub_dec = 'redirect ' + name_file_created.split('_')[0]
-                sub_dec += '_Substation.dss'
-                created_files = created_files.replace(sub_dec, '')
-                firstLine = 'MV3P' + name_file_created.split('_')[0] + '00'
-
-                filename_ = dir_network + '/' + name_file_created.split('_')[0]
-                filename_ += '_LinesMV_mod.dss'
-                with open(filename_, 'w') as the_file:
-                        lines = copy.deepcopy(original_lines)
-                        new_line = 'new line.' + firstLine
-                        new_line += ' bus1=Sourcebus bus2=AFTERMETER '
-                        new_line += 'r1=0.00001 x1=0.00001 length=0.0001 '
-                        new_line += 'units=m \n'
-                        lines.insert(0, new_line)
-                        the_file.seek(0)
-                        bus1 = "Sourcebus"
-
-                        for line_num in range(1,len(lines)):
-                            whole_line = lines[line_num].split(' ')
-                            bus1 = lines[line_num].split(' ')[2]
-                            bus2 = lines[line_num].split(' ')[3]
-
-                            if bus1.split('=')[1].split('.')[0].split(name_file_created.split('_')[0])[1] == '1':
-                                lines[line_num] = ''
-                                for elem in range(len(whole_line)):
-                                    if elem == 2: #campo del bus 1
-                                        lines[line_num] = lines[line_num] + 'bus1=AFTERMETER '
-                                    elif elem == len(whole_line)-1:
-                                        lines[line_num] = lines[line_num] +  whole_line[elem]
-                                    else:
-                                        lines[line_num] = lines[line_num] + whole_line[elem] + ' '
-
-                            elif bus2.split('=')[1].split('.')[0].split(name_file_created.split('_')[0])[1] == '1':
-                                lines[line_num] = ''
-                                for elem in range(len(whole_line)):
-                                    if elem == 3: #campo del bus 1
-                                        lines[line_num] = lines[line_num] + 'bus2=AFTERMETER '
-                                    elif elem == len(whole_line)-1:
-                                        lines[line_num] = lines[line_num] +  whole_line[elem]
-                                    else:
-                                        lines[line_num] = lines[line_num] + whole_line[elem] + ' '
-
-                        the_file.writelines(lines)
-
-                        the_file.close
-
-            else:
-                filename_ = dir_network + '/' + name_file_created.split('_')[0]
-                filename_ +=  '_LinesMV_snap.dss'
-                name_lines_mv_new = name_file_created.split('_')[0] + '_LinesMV_snap.dss'
-                firstLine = 'MV3P' + name_file_created.split('_')[0] + '00'
-                with open(filename_, 'w') as the_file:
-                    lines = copy.deepcopy(original_lines)
-                    new_line = 'new line.' + firstLine
-                    new_line += ' bus1=BUSMV' + name_file_created.split('_')[0]
-                    new_line += '1.1.2.3 bus2=AFTERMETER r1=0.00001 x1=0.00001 '
-                    new_line += 'length=0.0001 units=m \n'
-                    bus1 = name_file_created.split('_')[0] + "1"
-                    lines.insert(0, new_line)
-                    the_file.seek(0)
-
-                    for line_num in range(1,len(lines)):
-                        whole_line = lines[line_num].split(' ')
-                        bus1 = lines[line_num].split(' ')[2]
-                        bus2 = lines[line_num].split(' ')[3]
-
-                        if bus1.split('=')[1].split('.')[0].split(name_file_created.split('_')[0])[1] == '1':
-                            lines[line_num] = ''
-                            for elem in range(len(whole_line)):
-                                if elem == 2: #campo del bus 1
-                                    lines[line_num] = lines[line_num] + 'bus1=AFTERMETER '
-                                elif elem == len(whole_line)-1:
-                                    lines[line_num] = lines[line_num] +  whole_line[elem]
-                                else:
-                                    lines[line_num] = lines[line_num] + whole_line[elem] + ' '
-
-                        elif bus2.split('=')[1].split('.')[0].split(name_file_created.split('_')[0])[1] == '1':
-                            lines[line_num] = ''
-                            for elem in range(len(whole_line)):
-                                if elem == 3: #campo del bus 1
-                                    lines[line_num] = lines[line_num] + 'bus2=AFTERMETER '
-                                elif elem == len(whole_line)-1:
-                                    lines[line_num] = lines[line_num] +  whole_line[elem]
-                                else:
-                                    lines[line_num] = lines[line_num] + whole_line[elem] + ' '
-
-                    the_file.writelines(lines)
-                    the_file.close
-                old_exp = name_file_created.split('_')[0] + '_LinesMV'
-                new_exp = name_file_created.split('_')[0] + '_LinesMV_snap'
-                created_files = created_files.replace(old_exp, new_exp)
-
+                wrd1 = 'redirect ' + name_file_created.split('_')[0] + '_Substation.dss'
+                created_files = created_files.replace(wrd1, '')
+            
+            firstLine = 'MV3P' + name_circuit + '00'
+            
             file = open(dir_network + '/Master.dss', 'w')
             file.write('set defaultbasefrequency=60\n')
             # Datos de cortocircuito
@@ -1085,10 +960,10 @@ class ired:
                 file.write(nw_line)
             file.write(created_files + '\n')
             file.close()
-            return firstLine, name_lines_mv_new, bus1
+            return firstLine
         except Exception:
             self.print_error()
-            return "", "", ""
+            return ""
 
     """
     Function to change the column names of a dataframe: delete the 
@@ -1498,14 +1373,15 @@ class ired:
                 lines_mv = pd.concat([lines_mv_oh_layer, lines_mv_ug_layer],
                                      sort=True)
                 lines_mv.index = range(len(lines_mv.index))
-                drp_ls = lines_mv.loc[lines_mv['DSSName'].isnull()].index.values
-                lines_mv = lines_mv.loc[(lines_mv.DSSName != NULL), :]
-                lines_mv = lines_mv.loc[(lines_mv.DSSName != ""), :]
+                drp_ls = lines_mv.loc[lines_mv['DSSNAME'].isnull()].index.values
+                lines_mv = lines_mv.loc[(lines_mv.DSSNAME != NULL), :]
+                lines_mv = lines_mv.loc[(lines_mv.DSSNAME != ""), :]
                 lines_mv = lines_mv.drop(drp_ls)
                 lines_mv.index = range(len(lines_mv.index))
                 
                 # Distancia entre puntos de instalacion
                 fixed_distance = self.dlg.distance_ls.value()*1000
+                print("fixed_distance =", fixed_distance)
                 
                 """
                 Distancia entre puntos de instalación
@@ -1580,7 +1456,7 @@ class ired:
                 if lines_lv.empty is False:
                     try:
                         line_lv_groups = pd.DataFrame(list(lines_lv['LV_GROUP']),
-                                                      index=lines_lv['DSSName'].astype(str),
+                                                      index=lines_lv['DSSNAME'].astype(str),
                                                       columns=['LV_GROUP'])
                     except Exception:
                         self.print_error()
@@ -1604,7 +1480,7 @@ class ired:
                         # tx_layer = gp.read_file(name_shape + ".shp")
                         vect_traf.append(tx_layer)
                     tx_layer = pd.concat(vect_traf, sort=True)
-                    tx_layer = tx_layer.drop(tx_layer.loc[tx_layer['DSSName'].isnull()].index.values)
+                    tx_layer = tx_layer.drop(tx_layer.loc[tx_layer['DSSNAME'].isnull()].index.values)
                 except DriverError:
                     msg = "El nombre del archivo shp de la capa de "
                     msg += "transformadores debe ser igual al nombre de la capa"
@@ -1613,7 +1489,7 @@ class ired:
 
                 try:
                     tx_groups = pd.DataFrame(list(tx_layer['LV_GROUP']),
-                                             index=tx_layer['DSSName'],
+                                             index=tx_layer['DSSNAME'],
                                              columns=['LV_GROUP'])
                 except Exception:
                     self.print_error()
@@ -1673,7 +1549,7 @@ class ired:
                 # Fusibles
                 if layer_fuses == [] or layer_fuses == 0:
                     cols = ['PHASEDESIG', 'NC', 'OPERATINGV',  'bus1',
-                            'bus2', 'DSSName', 'MV_GROUP', 'HC',
+                            'bus2', 'DSSNAME', 'MV_GROUP', 'HC',
                             'SAVE','COORDINATE', 'geometry']
                     fuse_layer = pd.DataFrame(np.nan, columns=cols,
                                               index=[])
@@ -1689,7 +1565,7 @@ class ired:
                         fuse_layer['bus2'] = fuse_layer['bus2'].str.replace('_swt', '')
                     except DriverError:
                         cols = ['PHASEDESIG', 'NC', 'OPERATINGV',  'bus1',
-                                'bus2', 'DSSName', 'MV_GROUP', 'HC',
+                                'bus2', 'DSSNAME', 'MV_GROUP', 'HC',
                                 'SAVE','COORDINATE', 'geometry']
                         fuse_layer = pd.DataFrame(np.nan, columns=cols,
                                                   index=[])
@@ -1701,7 +1577,7 @@ class ired:
 
                 # Reconectadores
                 cols_rec = ['NOMVOLT','PHASEDESIG', 'NOMINALVOL',
-                            'NC', 'HC', 'bus1', 'bus2', 'DSSName',
+                            'NC', 'HC', 'bus1', 'bus2', 'DSSNAME',
                             'MV_GROUP']
                 if layer_rec == [] or layer_rec == 0:
                     recloser_layer = pd.DataFrame(np.nan, columns=cols_rec,
@@ -1780,14 +1656,14 @@ class ired:
                 Grafo = circuit_graph(nodes_mv, lines_mv)  # Grafo
 
                 # ? Leer como en el rojo
-                tx_modelling = False
+                tx_modelling = True
                 line_tx_definition = ''
                 substation_type = ''
                 
                 # Creacion de master
-                x = self.create_master(dir_network, name_file_created,
+                firstLine = self.create_master(dir_network, name_file_created,
                                        tx_modelling, volt_nom)
-                firstLine, name_lines_mv_new, bus1 = x
+                print("firstLine = ", firstLine)
 
                 # #####################################################
                 # #####################################################
@@ -1894,7 +1770,6 @@ class ired:
                     # %% SALIDAS DE FUNCIONES QUE CREAN DATAFRAMES DE PROTECCIONES
                     CircuitBreakDvRoR, CircuitBreakDvFF_BFC = pDevices(Grafo, firstLine,
                                                                        fuse_layer, recloser_layer)
-                    print("CircuitBreakDvFF_BFC = ", CircuitBreakDvFF_BFC)
                     cols = ['BUSINST', 'VREG', 'BANDWIDTH']
 					
                     if layer_reg != [] and layer_reg != 0:
@@ -2488,8 +2363,10 @@ class ired:
                             DERs_MV = []
                             Trafos_DERs_MV = []
 
+                            trafo_df_f = pd.DataFrame()
                             DERs_LV, DERs_MV, Trafos_DERs_MV = DER_allocation_HHC(LV_hist_df, MV_hist_df,
-                                                                                mv_loads_layer)
+                                                                                  mv_loads_layer,
+                                                                                  trafo_df_f)
                             DERs = DERs_LV + DERs_MV
 
                             # Compile model for simulation - run simulation
@@ -2653,7 +2530,7 @@ class ired:
 
                     for elem in MV_hist_df.index:
                         try:
-                            idx_tx = tx_layer.loc[tx_layer['DSSName'] == elem].index.values[0]
+                            idx_tx = tx_layer.loc[tx_layer['DSSNAME'] == elem].index.values[0]
 
                             if lim_kVA is True:
                                 if (Voltage_comp is True and Thermal_analysis is True
@@ -2678,7 +2555,7 @@ class ired:
                         except Exception:
                             pass
                     x = data_grouping(Grafo, MV_hist_df, fixed_distance, final_der,
-                                      lines_mv, lines_mv_oh_layer_original,
+                                      lines_mv_oh_layer_original,
                                       lines_mv_ug_layer_original, Voltage_comp,
                                       Thermal_analysis, Prot_comp, lim_kVA)
                     lines_mv_oh_layer_original = x[0]
@@ -2723,5 +2600,6 @@ class ired:
         except Exception:
             title = "Final"
             msg = "Simulación finalizada con errores"
+            self.print_error()
             QMessageBox.critical(None, title, msg)
-            msg = self.print_error()
+            

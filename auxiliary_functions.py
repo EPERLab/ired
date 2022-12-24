@@ -15,27 +15,16 @@ import subprocess
 import datetime as dt
 from PyQt5.QtGui import *  # Para desplegar mensajes, util para debugin
 from PyQt5.QtCore import *
-#from qgis.gui import QgsMessageBar  # Paquete requerido para desplegar mensajes en la ventana principal de QGIS.
-"""
+from qgis.gui import QgsMessageBar  # Paquete requerido para desplegar mensajes en la ventana principal de QGIS.
+
 from qgis.core import *
 from qgis.utils import iface
-"""
+
 
 from PyQt5.QtWidgets import QMessageBox
 import sys
 import re
 import traceback
-
-def weighted_choice(choices):  #
-    total = sum(w for c, w in choices)
-    r = random.uniform(0, total)
-    upto = 0
-    for c, w in choices:
-        if upto + w >= r:
-            return c
-        upto += w
-    assert False
-
 
 def natural_sort(l):  # sort list in alphanumeric order
     try:
@@ -105,8 +94,10 @@ def ReadLoadProfiles(self, perfilespath, dir_network, name_file_created):  # rea
     try:
         curves = [""]
         filenames = list()
+        filename_ = dir_network + '/' + name_file_created.split('_')[0]
+        filename_ += '_LoadShapes.dss'
         # open loadshapes file and read old path in first line
-        with open(dir_network + '/' + name_file_created.split('_')[0] + '_LoadShapes.dss', 'r') as file_object:
+        with open(filename_, 'r') as file_object:
             filenames = file_object.readlines()
             old_path = filenames[0].replace('!', '').replace('\\', '/').replace('\n', '')
             old_dir_profiles_gd= os.path.join(old_path, 'DG').replace('\\', '/')
@@ -121,7 +112,7 @@ def ReadLoadProfiles(self, perfilespath, dir_network, name_file_created):  # rea
             filenames[i] = str(filenames[i]).replace('\\', '/').replace(old_path, perfilespath).replace('/', '\\')
     
         # open loadshapes file and replace old path with new for all lines in file
-        with open(dir_network + '/' + name_file_created.split('_')[0] + '_LoadShapes.dss', 'w') as file_object:
+        with open(filename_, 'w') as file_object:
             for loadshape in filenames:
                 file_object.write(loadshape.replace('\\', '/').replace(old_path, perfilespath).replace('/', '\\'))
     
@@ -130,27 +121,7 @@ def ReadLoadProfiles(self, perfilespath, dir_network, name_file_created):  # rea
                 file_object.writelines(
                     'New XYCurve.MyPvsT npts=4 xarray=[.001 25 75 100] yarray=[1.2 1.0 0.8 0.6]\n')  # pmpp for 25C
                 file_object.writelines('New XYCurve.MyEff npts=4 xarray=[.1 .2 .4 1.0] yarray=[.86 .9 .93 .97]\n')
-    
-            # add PV profile and PV temp shapes if not in file
-            if self.dlg.PV.isChecked():
-                try :
-                    prof = open(old_dir_profiles_gd.replace('/', '\\') + '\\' + 'PVprofile.txt')
-                    prof.close()
-                except IOError:
-                    curves = ["ERROR"]
-                    QMessageBox.critical(None, QCoreApplication.translate('dialog', "Error"), \
-                                         QCoreApplication.translate('dialog', u"No se encuentra perfil de sistemas fotovoltaicos") + "\n" + \
-                                         QCoreApplication.translate('dialog',
-                                                                    u"Verificar ubicación o existencia de archivos PVprofile.txt y PVtemp.txt"))
-                    return curves
-    
-                st = 'New Loadshape.MyIrrad npts=96 minterval=15 csvfile=' + old_dir_profiles_gd.replace('/', '\\')\
-                     + '\\' + 'PVprofile.txt\n'
-                if st not in filenames:
-                    file_object.write('New Loadshape.MyIrrad npts=96 minterval=15 csvfile=' + dir_profiles_gd.replace('/', '\\')
-                                      + '\\' + 'PVprofile.txt\n')  # normalized with 1.045180145 kW/m2
-                    file_object.write('New Tshape.MyTemp npts=96 minterval=15 csvfile=' + dir_profiles_gd.replace('/', '\\')
-                                      + '\\' + 'PVtemp.txt\n')
+            
         file_object.closed
     
         return curves
