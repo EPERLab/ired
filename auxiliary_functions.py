@@ -174,7 +174,7 @@ def ExtractVoltageData(DSScircuit, V_buses, Base_V, t): #FUNCIÓN MODIFICADA
     return V_buses
     
 
-def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it, P_to_be_matched, Q_to_be_matched, hora_sec,
+def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it, P_to_be_matched, Q_to_be_matched, V_to_be_matched, hora_sec,
                  study, dir_network, tx_active, yearly_steps, firstLine, substation, line_tx_definition, gen_powers, gen_rpowers):
     """
     Load allocation algorithm
@@ -202,14 +202,18 @@ def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it, P_to_
             counter = 1
             DP_to_be_matched = [float(P_to_be_matched)]
             DQ_to_be_matched = [float(Q_to_be_matched)]
+            V_to_be_matched =  [float(V_to_be_matched)]
         if study == 'daily':
             counter = 96
             DP_to_be_matched = [float(x) for x in P_to_be_matched]
             DQ_to_be_matched = [float(x) for x in Q_to_be_matched]
+            V_to_be_matched =  [float(x) for x in V_to_be_matched]
+            
         if study == 'yearly':
             counter = 35040 / yearly_steps
             DP_to_be_matched = [float(x) for x in P_to_be_matched]
             DQ_to_be_matched = [float(x) for x in Q_to_be_matched]
+            V_to_be_matched =  [float(x) for x in V_to_be_matched]
         
         if DP_to_be_matched == [] or DP_to_be_matched == [0] or DP_to_be_matched[0] == 0:
             return -1, 0, 0, 0, 0, 0, 0
@@ -231,7 +235,6 @@ def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it, P_to_
         print( "temp_powersQ = ", temp_powersQ )
         """
         
-        # print temp_powersP
         temp_powersPtot = []
         temp_powersQtot = []
         
@@ -257,11 +260,8 @@ def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it, P_to_
                 if DP_to_be_matched[t] != 0:                    
                     # P correction calc
                     kW_corrector[t] = kW_corrector[t] * ((DP_to_be_matched[t] + gen_powers[t]) / (temp_powersP[t] + gen_powers[t]))                    
-                    
                     # Q correction calc
                     kVAr_corrector[t] = kVAr_corrector[t] * ( (DQ_to_be_matched[t] + gen_rpowers[t]) / (temp_powersQ[t] + gen_rpowers[t]) )
-                    
-                    
                 else:
                     kW_corrector[t] = 0 
                     kVAr_corrector[t] = 0
@@ -292,13 +292,14 @@ def PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it, P_to_
     
             temp_powersP = []
             temp_powersQ = []
-    
-            for t in range( int(counter) ):  # corrector loop
-    
-                # DSStext.Command = 'batchedit load..* pf='+str(pf_corrector[t])
                 
-                DSStext.Command = 'batchedit load.n_.* kW=' + str(kW_corrector[t])  # apply kW corrector previously calculated
-                DSStext.Command = 'batchedit load.n_.* kvar=' + str(kVAr_corrector[t])  # apply kVAr corrector previously calculated
+            for t in range( int(counter) ):  # corrector loop
+                DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched[t])
+                DSStext.Command = 'batchedit load..* kW=' + str(kW_corrector[t])  # apply kW corrector previously calculated
+                DSStext.Command = 'batchedit load..* kvar=' + str(kVAr_corrector[t])  # apply kVAr corrector previously calculated
+                #DSStext.Command = 'batchedit RegControl..* enabled = no' # No RegControls
+                #DSStext.Command = 'batchedit CapControl..* enabled = no' # No CapControls
+                
                 DSScircuit.Solution.Solve()
                 # Result Query
                 DSScircuit.setActiveElement('line.' + firstLine)

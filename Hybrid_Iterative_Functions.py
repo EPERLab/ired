@@ -15,6 +15,11 @@ pd.options.mode.chained_assignment = None
 import pickle
 import os
 import time
+import sys
+import traceback
+import copy
+from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+from matplotlib import pyplot as plt
 from . import trafoOperations_spyder as trafOps
 
 
@@ -37,14 +42,111 @@ def setUpCOMInterface(): #Función plugin rojo inicializar OpenDSS
 # Input: load_curve_path, load_curve_name
 # Output: circuit_demand: dict({time instant (i.e. 0,1,2,..,96): [dd/mm/yyyy, hh:mm, P, Q ]})
 
-def loadFeederLoadCurve(load_curve_path, load_curve_name):
-    filename_ = load_curve_path + "/"  + load_curve_name + '.csv'
-    with io.open(filename_, 'rt', encoding = "ascii") as workbook:
-        reader = csv.reader(workbook)                    
-        next(reader)                    
-        circuit_demand = [[row[3], row[2], row[0], row[1]] for row in reader]  #day, hour, P (kW), Q (kVAr)
-        workbook.closed
-    return circuit_demand
+def loadFeederLoadCurve(load_curve_circuit):
+        
+    # Primero verificar la extensión del archivo
+    file_ext = load_curve_circuit.split(".")[-1].upper() # Extensión del archivo. Debe de ser .csv
+    if file_ext == "CSV":
+
+        df_cd = pd.read_csv(load_curve_circuit, sep=None, engine='python').astype(str)
+        df_cd.columns = df_cd.columns.str.upper()
+        
+        # check that the required columns are present in the CSV file
+        # Potencia Activa
+        p_options = ["P (KW)", "P (MW)", "P(KW)", "P(MW)"]
+        if not df_cd.columns.isin(p_options).any():
+            msg = "Existe un error en el nombre de la columna de la potencia activa o esta no existe en el archivo de curva de demanda y tensión. \n"
+            msg += "Recuerde que el nombre de la columna debe de ser 'P (kW)', 'P (MW)', 'P(kW)' o 'P(MW)', sin importar mayúsculas o minúsculas. \n" 
+            msg += "Favor corregir el archivo."
+            title = "Error en el archivo de curva de demanda y tensión"
+            QMessageBox.information(None, title, msg)
+            return None
+        else:
+            p_name = df_cd.columns[df_cd.columns.isin(p_options)][0]
+            if "KW" in p_name:
+                factor_p = 1    # Si el valor de la curva está en kW
+            else:
+                factor_p = 1000 # Si el valor de la curva está en MW
+        
+        # Potencia Reactiva
+        q_options = ["Q (KVAR)", "Q (MVAR)", "Q(KVAR)", "Q(MVAR)"]
+        if not df_cd.columns.isin(q_options).any():
+            msg = "Existe un error en el nombre de la columna de la potencia reactiva o esta no existe en el archivo de curva de demanda y tensión. \n"
+            msg += "Recuerde que el nombre de la columna debe de ser 'Q (kVAr)', 'Q (MVAr)', 'Q(kVAr)' o 'Q(MVAr)', sin importar mayúsculas o minúsculas. \n" 
+            msg += "Favor corregir el archivo."
+            title = "Error en el archivo de curva de demanda y tensión"
+            QMessageBox.information(None, title, msg)
+            return None
+        else:
+            q_name = df_cd.columns[df_cd.columns.isin(q_options)][0]
+            if "KVAR" in q_name:
+                factor_q = 1    # Si el valor de la curva está en kVAr
+            else:
+                factor_q = 1000 # Si el valor de la curva está en MVAr
+        
+        # Tensión
+        v_options = ["V (PU)", "V(PU)"]
+        if not df_cd.columns.isin(v_options).any():
+            msg = "Existe un error en el nombre de la columna de la tensión en la cabecera o esta no existe en el archivo de curva de demanda y tensión. \n"
+            msg += "Recuerde que el nombre de la columna debe de ser 'V (pu)' o 'V(pu)', sin importar mayúsculas o minúsculas. \n "
+            msg += "Favor corregir el archivo."
+            title = "Error en el archivo de curva de demanda y tensión"
+            QMessageBox.information(None, title, msg)
+            return None
+        else:
+            v_name = df_cd.columns[df_cd.columns.isin(v_options)][0]
+        
+        # Verificar que los valores de la columna estén entre 0.8 y 1.5
+        if not df_cd[v_name].astype(float).between(0.75, 1.25).all():
+            msg = "Los valores asignados para la columna de tensión no son valores en por unidad (pu). \n"
+            msg += "Recuerde que el nombre de la columna debe de ser 'V (pu)' o 'V(pu)', sin importar mayúsculas o minúsculas. \n" 
+            msg += "Favor corregir el archivo."
+            title = "Error en el archivo de curva de demanda y tensión"
+            QMessageBox.information(None, title, msg)
+            return None
+            
+        # Día
+        d_options = ["DIA", "DAY", "DATE"]
+        # Verificación de la existencia de la columna
+        if not df_cd.columns.isin(d_options).any():
+            msg = "Existe un error en el nombre de la columna de los días medidos o esta no existe en el archivo de curva de demanda y tensión. \n"
+            msg += "Recuerde que el nombre de la columna debe de ser 'Dia' (SIN TILDE), sin importar mayúsculas o minúsculas. \n" 
+            msg += "Favor corregir el archivo."
+            title = "Error en el archivo de curva de demanda y tensión"
+            QMessageBox.information(None, title, msg)
+            return None
+        else:
+            d_name = df_cd.columns[df_cd.columns.isin(d_options)][0]
+        
+        # Hora
+        h_options = ["HORA", "HOUR"]
+        if not df_cd.columns.isin(d_options).any():
+            msg = "Existe un error en el nombre de la columna de las horas medidos o esta no existe en el archivo de curva de demanda y tensión. \n"
+            msg += "Recuerde que el nombre de la columna debe de ser 'Hora', sin importar mayúsculas o minúsculas. \n "
+            msg += "Favor corregir el archivo."
+            title = "Error en el archivo de curva de demanda y tensión"
+            QMessageBox.information(None, title, msg)
+            return None
+        else:
+            h_name = df_cd.columns[df_cd.columns.isin(h_options)][0]
+        
+        # reorder the columns as required
+        df_cd = df_cd.loc[:, [d_name, h_name, p_name, q_name, v_name]]
+        
+        circuit_demand = df_cd.values.tolist()
+        
+        return circuit_demand
+    
+    else:
+        msg = "La extensión del archivo no es válida. \n"
+        msg += "Recuerde que la extensión requerida es de tipo .csv"
+        title = "Error en el archivo de curva de demanda y tensión"
+        QMessageBox.information(None, title, msg)
+        return None  
+        
+    
+    
+    
 
 #%% BUS LV GROUP- dataframe.apply function
 # Input: DSScircuit, g: bus name, lv_groups
@@ -79,10 +181,14 @@ def getbases(DSStext, DSScircuit, dss_network, firstLine, lv_groups, tx_groups):
     DSStext.Command = 'Set mode=snapshot'  # Type of Simulation
     DSStext.Command = 'Set time=(0,0)'  # Set the start simulation time                
     DSStext.Command = 'New Monitor.HVMV_PQ_vs_Time line.' + firstLine + ' 1 Mode=1 ppolar=0'  # Monitor in the first line to monitor P and Q
-    DSStext.Command = 'batchedit load.n_.* enabled = no' # No load simulation
+    DSStext.Command = 'batchedit load..* enabled = no' # No load simulation
     DSStext.Command = 'batchedit storage..* enabled = no' # No load simulation
     DSStext.Command = 'batchedit PVSystem..* enabled = no' # No load simulation
     DSStext.Command = 'batchedit Generator..* enabled = no' # No load simulation
+    DSStext.Command = 'batchedit RegControl..* enabled = no' # No RegControls
+    DSStext.Command = 'batchedit CapControl..* enabled = no' # No CapControls
+    
+    DSStext.Command = "VSource.Source.pu = 1.00"
     
     DSScircuit.Solution.Solve()  # Solve the circuit
 
@@ -103,6 +209,38 @@ def getbases(DSStext, DSScircuit, dss_network, firstLine, lv_groups, tx_groups):
     Base_V.to_csv('bases.csv')
 
     return VBuses_b, Base_V
+
+def getbases_simple(DSStext, DSScircuit, dss_network, firstLine):
+    DSStext.Command = 'clear'  # clean previous circuits
+    DSStext.Command = 'New Circuit.Circuito_Distribucion_Daily'
+    DSStext.Command = 'Compile ' + dss_network + '/Master.dss'  # Compile the OpenDSS Master file
+    DSStext.Command = 'Set mode=snapshot'  # Type of Simulation
+    DSStext.Command = 'Set time=(0,0)'  # Set the start simulation time                
+    DSStext.Command = 'New Monitor.HVMV_PQ_vs_Time line.' + firstLine + ' 1 Mode=1 ppolar=0'  # Monitor in the first line to monitor P and Q
+    DSStext.Command = 'batchedit load..* enabled = no' # No load simulation
+    DSStext.Command = 'batchedit storage..* enabled = no' # No load simulation
+    DSStext.Command = 'batchedit PVSystem..* enabled = no' # No load simulation
+    DSStext.Command = 'batchedit Generator..* enabled = no' # No load simulation
+    DSStext.Command = 'batchedit RegControl..* enabled = no' # No load simulation
+    DSStext.Command = 'batchedit CapControl..* enabled = no' # No load simulation
+    
+    DSStext.Command = "VSource.Source.pu = 1.00"
+    
+    DSScircuit.Solution.Solve()  # Solve the circuit
+
+    VBuses_b = pd.DataFrame(list(DSScircuit.AllBusVmag), index=list(DSScircuit.AllNodeNames), columns=['VOLTAGEV'])
+    VBuses_b=VBuses_b[~VBuses_b.index.str.contains('_der')]; VBuses_b=VBuses_b[~VBuses_b.index.str.contains('_swt')]
+
+    base_vals = [120, 138, 208, 240, 254, 277, 416, 440, 480,
+                        2402, 4160, 7620, 7967, 13200, 13800, 14380,
+                        19920, 24900, 34500, 79670, 132790]
+
+    Base_V = pd.DataFrame()
+    Base_V['BASE'] = VBuses_b['VOLTAGEV'].apply(lambda v : base_vals[[abs(v-i) for i in base_vals].index(min([abs(v-i) for i in base_vals]))])
+    Base_V['BUSNAME'] = Base_V.index
+    del Base_V['BUSNAME']
+
+    return Base_V
 
 #%% CIRCUIT BASE CASE SNAPSHOT RUN - does a simulation of the circuits base case (only already installed DERs). Gets the circuit's base characteristics for comparison with increased DERs levels in the HC analysis
 # Input: DSStext, DSScircuit, snapshotdate, snapshottime, firstLine, tx_modelling, substation_type, line_tx_definition, circuit_demand, Base_V
@@ -148,19 +286,23 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
         temp_b = circuit_demand[ij][1]  # hour                    
         if str(temp_a.replace('/', '') + temp_b.replace(':', '')) == daily_strtime:                        
             P_to_be_matched = circuit_demand[ij][2]  # Active power
-            Q_to_be_matched = circuit_demand[ij][3]  # Reactive power           
+            Q_to_be_matched = circuit_demand[ij][3]  # Reactive power
+            V_to_be_matched = circuit_demand[ij][4]  # Voltage
+            break
 
     #%% LoadAllocation Simulation
     DSStext.Command = 'clear'
     DSStext.Command = 'New Circuit.Circuito_Distribucion_Snapshot'
     DSStext.Command = 'Compile ' + dss_network + '/Master.dss'  # Compile the OpenDSS Master file
-    DSStext.Command = 'batchedit generator.DERf_.* enabled = no' # No fictitious generators simulation
-    DSStext.Command = 'batchedit transformer.F_.* enabled = no' # No fictitious generators simulation
     DSStext.Command = 'Set mode=daily'  # Type of Simulation
     DSStext.Command = 'Set number=1'  # Number of steps to be simulated
     DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
     DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time                
     DSStext.Command = 'New Monitor.HVMV_PQ_vs_Time line.' + firstLine + ' 1 Mode=1 ppolar=0'  # Monitor in the transformer secondary side to monitor P and Q
+    
+    # Modify the vpu from source according to circuit_demand voltage curve:
+    
+    DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched)
     
     # Run the daily power flow for a particular moment
     DSScircuit.Solution.Solve()  # Initialization solution                                            
@@ -175,24 +317,12 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
     gen_p = 0
     gen_q = 0
     GenNames = DSScircuit.Generators.AllNames
-    PVNames = DSScircuit.PVSystems.AllNames
     if GenNames[0] != 'NONE':
         for i in GenNames: # extract power from generators
-            if "DERf_" in str(i):
-                continue
 
             DSScircuit.setActiveElement('generator.' + i)
             p = DSScircuit.ActiveElement.Powers
 
-            for w in range(0, len(p), 2):
-                gen_p += -p[w] # P
-                gen_q += -p[w + 1] # Q
-        gen_powers[0] += gen_p
-        gen_rpowers[0] += gen_q
-    if PVNames[0] != 'NONE':
-        for i in PVNames: # extract power from PVSystems
-            DSScircuit.setActiveElement('PVSystem.' + i)
-            p = DSScircuit.ActiveElement.Powers
             for w in range(0, len(p), 2):
                 gen_p += -p[w] # P
                 gen_q += -p[w + 1] # Q
@@ -204,14 +334,17 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
     DSSobj.AllowForms = 0
     [DSScircuit, errorP_i, errorQ_i, temp_powersP, temp_powersQ, kW_sim,
       kVAr_sim] = auxfcns.PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it_correction,
-                                      P_to_be_matched, Q_to_be_matched, hora_sec, study,
+                                      P_to_be_matched, Q_to_be_matched, V_to_be_matched, hora_sec, study,
                                       dss_network, tx_modelling, 1, firstLine, substation_type,
                                       line_tx_definition, gen_powers, gen_rpowers)
 
     DSSobj.AllowForms = 1
     t2= time.time()
-    print('Loadallocationtime: ' + str(t2 - t1))
-    #%% Post load allocation simulation
+    print('Tiempo Load Allocation : ' + str(t2 - t1))
+    
+    
+    #%% Post load allocation simulation - base without DERs for Voltage analysis
+    
     DSStext.Command = 'clear'
     DSStext.Command = 'New Circuit.Circuito_Distribucion_Snapshot'
     DSStext.Command = 'Compile ' + dss_network + '/Master.dss'  # Compile the OpenDSS Master file
@@ -220,8 +353,12 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
     DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
     DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time
     
-    DSStext.Command = 'batchedit load.n_.* kW=' + str(kW_sim[0]) # kW corrector
-    DSStext.Command = 'batchedit load.n_.* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+    DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched)
+    DSStext.Command = 'batchedit load..* kW=' + str(kW_sim[0]) # kW corrector
+    DSStext.Command = 'batchedit load..* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+    
+    DSStext.Command = "batchedit generator..* enabled=no" # Apaga todos los generadores existentes previo al estudio
+    
     DSScircuit.Solution.Solve()
     
     DSScircuit.setActiveElement('line.' + firstLine)
@@ -236,6 +373,7 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
     VBuses=VBuses[~VBuses.index.str.contains('aftermeter')]
     VBuses=VBuses[~VBuses.index.str.contains('_der')]
     VBuses=VBuses[~VBuses.index.str.contains('_swt')]
+    VBuses=VBuses[~VBuses.index.str.endswith('.4')]
     No_DERs_run_Vbuses = pd.DataFrame()
     No_DERs_run_Vbuses['VOLTAGE'] = VBuses.VOLTAGEV/Base_V.BASE
     
@@ -244,7 +382,21 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
     tx_layer['kVA_snap'] = tx_layer.DSSNAME.apply(lambda x : get_kva_trafos(DSScircuit, x))
     if mv_loads_layer.empty  is False:
         mv_loads_layer['kVA_snap'] = mv_loads_layer.DSSNAME.apply(lambda x : get_kva_load(DSScircuit, x))
-
+    
+    # Retornar el valor de los taps del regulador (RegControl)
+    reg_taps = []
+    for tx in DSScircuit.Transformers.AllNames:
+        if "reg" in tx:
+            DSScircuit.Transformers.Name = tx
+            tap_val = DSScircuit.ActiveElement.Properties("tap").val 
+            reg_taps.append((tx,tap_val))
+            
+    cap_steps = []
+    for cap in DSScircuit.Capacitors.AllNames:
+        if DSScircuit.Capacitors.AllNames[0] != "NONE":
+            DSScircuit.Capacitors.Name = cap
+            step_val = DSScircuit.ActiveElement.Properties("states").val 
+            cap_steps.append((cap, step_val))
             
     t3= time.time()
     print('Basecase snapshot time: ' + str(t3 - t2))
@@ -320,8 +472,9 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
                 DSStext.Command = 'Set number=1'  # Number of steps to be simulated
                 DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
                 DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time
-                DSStext.Command = 'batchedit load.n_.* kW=' + str(kW_sim[0]) # kW corrector
-                DSStext.Command = 'batchedit load.n_.* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+                DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched) # Tensión en cabecera
+                DSStext.Command = 'batchedit load..* kW=' + str(kW_sim[0]) # kW corrector
+                DSStext.Command = 'batchedit load..* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
                 DSScircuit.Solution.Solve()
     
                 #%% Fault study (dynamics) simulation
@@ -340,7 +493,7 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
     
                 #BFC
                 breakerelement = CircuitBreakDvFF_BFC.loc[CircuitBreakDvFF_BFC['Element']==element, 'RecloserElement'].iloc[-1]
-                if not np.isnan(breakerelement):
+                if type(breakerelement) is str:
                     No_DER_BFCCurrents[faulttype][element, breakerelement, faultedbus] = []
                     for element_i in (element, breakerelement):
                         DSScircuit.setActiveElement(element_i) # faulted element
@@ -413,8 +566,9 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
                 DSStext.Command = 'Set number=1'  # Number of steps to be simulated
                 DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
                 DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time
-                DSStext.Command = 'batchedit load.n_.* kW=' + str(kW_sim[0]) # kW corrector
-                DSStext.Command = 'batchedit load.n_.* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+                DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched) # Tensión en cabecera
+                DSStext.Command = 'batchedit load..* kW=' + str(kW_sim[0]) # kW corrector
+                DSStext.Command = 'batchedit load..* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
                 DSScircuit.Solution.Solve()
     
         
@@ -442,7 +596,7 @@ def base_Case_Run(DSStext, DSScircuit, DSSobj,DSSprogress, snapshotdate,
     else:
         No_DER_RoRCurrents = pd.DataFrame()
 
-    return No_DERs_run_Vbuses, No_DER_FFCurrents, No_DER_RoRCurrents, No_DER_BFCCurrents, kW_sim, kVAr_sim, lv_loads_layer
+    return No_DERs_run_Vbuses, No_DER_FFCurrents, No_DER_RoRCurrents, No_DER_BFCCurrents, kW_sim, kVAr_sim, reg_taps, cap_steps, lv_loads_layer
 
 #%% FIND THE LINES NOMINAL CAPACITY (already exixts in plug in rojo) - Gets the nominal capacity of lines for thermal analysis in HC
 # Input: DSScircuit
@@ -493,20 +647,13 @@ def getloadbuses(loadsLV_file_name, loadsMV_file_name, dss_network):
 # Input: name_file_created - GD file 
 # Output: DERinstalled_buses : list(busname)
 
-def getGDinstalled(name_file_created):
-    DERinstalled_buses = []  # forbidden buses --> buses with DER already installed
-    DERinstalled=0
+def getGDinstalled(der_ss_layer):
     try:
-        gd_file = open(name_file_created.split('_')[0] + '_DG.dss')  # DG file reading
-        gds = gd_file.read().split('\n')
-        for i in gds:
-            try:
-                DERinstalled_buses.append(i.split(" ")[2].replace("bus1=", "").split(".")[0])  # forbidden bus
-                DERinstalled += float(i.split('kW=')[1].split(" ")[0])
-            except IndexError:
-                pass
-    except IOError:
-        pass
+        DERinstalled_buses = list(der_ss_layer["bus1"].values) # forbidden buses --> buses with DER already installed
+        DERinstalled = der_ss_layer["KVA"].sum()
+    except:
+        DERinstalled_buses = []  # forbidden buses --> buses with DER already installed
+        DERinstalled=0
     return DERinstalled_buses, DERinstalled
 
 #%% DERs SNAPSHOT RUN 
@@ -515,7 +662,7 @@ def getGDinstalled(name_file_created):
 
 def DERs_Run(DSStext, DSScircuit, snapshotdate, snapshottime, firstLine,
             tx_modelling, substation_type, line_tx_definition, circuit_demand,
-            Base_V, kW_sim, kVAr_sim, DERs, Trafos, dss_network): # time: hh:mm
+            Base_V, kW_sim, kVAr_sim, DERs, Trafos, dss_network, reg_taps, cap_steps): # time: hh:mm
     #%% Calculate the hour in the simulation
     h, m = snapshottime.split(':')
     if m != '00' or m != '15' or m != '30' or m != '45':  # round sim minutes
@@ -537,7 +684,17 @@ def DERs_Run(DSStext, DSScircuit, snapshotdate, snapshottime, firstLine,
     snapshottime = h + ':' + m
     day_ = snapshotdate.replace('/', '')
     day_ = day_.replace('-', '')
+    daily_strtime = str(day_ + snapshottime.replace(':', ''))
     hora_sec = snapshottime.split(':')
+    
+    # V to match
+    V_to_be_matched = 0
+    for ij in range(len(circuit_demand)):
+        temp_a = circuit_demand[ij][0]  # day
+        temp_b = circuit_demand[ij][1]  # hour                    
+        if str(temp_a.replace('/', '') + temp_b.replace(':', '')) == daily_strtime:                        
+            V_to_be_matched = circuit_demand[ij][4]  # Voltage
+            break
     
     #%% simulation
     DSStext.Command = 'clear'
@@ -547,14 +704,29 @@ def DERs_Run(DSStext, DSScircuit, snapshotdate, snapshottime, firstLine,
     DSStext.Command = 'Set number=1'  # Number of steps to be simulated
     DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
     DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time
-                          
-    DSStext.Command = 'batchedit load.n_.* kW=' + str(kW_sim[0]) # kW corrector
-    DSStext.Command = 'batchedit load.n_.* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+    DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched) # Tensión en cabecera
+    DSStext.Command = 'batchedit load..* kW=' + str(kW_sim[0]) # kW corrector
+    DSStext.Command = 'batchedit load..* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+    DSStext.Command = 'batchedit RegControl..* enabled = no' # No RegControls
+    DSStext.Command = 'batchedit CapControl..* enabled = no' # No CapControls
+    
     for tx in Trafos:
         DSStext.Command = tx
     for der in DERs:
         DSStext.Command = der
     
+    for reg_t in reg_taps:
+        reg = reg_t[0]
+        tap = reg_t[1]
+        # Fija la posición del tap del regulador con respecto al caso base
+        DSStext.Command = "Transformer."+reg+".tap ="+tap
+    
+    for cap_s in cap_steps:
+        cap = cap_s[0]
+        step = cap_s[1]
+        # Fija la posición del tap del regulador con respecto al caso base
+        DSStext.Command = "Capacitor."+cap+".states ="+step
+        
     DSScircuit.Solution.Solve()
 
 #%% THREE PHASE MV BUSES TO ALLOCATE LARGE SCALE DER - finds the buses every 100 m to intall DER of large scale
@@ -562,8 +734,8 @@ def DERs_Run(DSStext, DSScircuit, snapshotdate, snapshottime, firstLine,
 # Output: chosen_buses_dict: dict with distance every 100 m as keys and a tuple as value (BUSMV, NOMVOLTMV), chosen_buses_list: list of all buses for every distance
 def distance_nodes_MV(G, nodes_mv, lineas_mt, trafos, fixed_distance):
     # Empieza algoritmo
-    rand_bus = list(G.nodes.keys())[0]
-    ckt_name = rand_bus.split(rand_bus[min([i for i, c in enumerate(rand_bus) if c.isdigit()])])[0].split('BUSMV')[1]
+    #rand_bus = list(G.nodes.keys())[0]
+    #ckt_name = rand_bus.split(rand_bus[min([i for i, c in enumerate(rand_bus) if c.isdigit()])])[0].split('BUSMV')[1]
     # first_bus = 'BUSMV' + ckt_name + '1'
     first_bus = 'AFTERMETER'
     
@@ -574,9 +746,8 @@ def distance_nodes_MV(G, nodes_mv, lineas_mt, trafos, fixed_distance):
     
     df_distancia = pd.DataFrame(np.nan, index=list(G.nodes), columns=['nodes', 'distance'])
     df_distancia['nodes'] = list(G.nodes)
-    df_distancia['nodes'] = list(G.nodes)
-    nx.write_gpickle(G, 'C:/Users/bjza0/Documents/2021/Tesis/tesis_licenciatura/Graph.gpickle')
     print("first_bus = ", first_bus)
+    
     for idx, yield_ in df_distancia.iterrows():
         node = yield_['nodes']
         try:
@@ -586,6 +757,7 @@ def distance_nodes_MV(G, nodes_mv, lineas_mt, trafos, fixed_distance):
             dist = 0
             print("Error nodo ", node)
         df_distancia.loc[idx, 'distance']= dist
+    
     # df_distancia['distance']=df_distancia['nodes'].apply(lambda b: shortest_path_handling_errors(first_bus, b))
     # df_distancia['distance'] = df_distancia['distance'].astype(float)
     
@@ -676,11 +848,10 @@ def distance_nodes_MV(G, nodes_mv, lineas_mt, trafos, fixed_distance):
             step_pd.loc[key,'target'] = dist_dict[step][key]['target']
         
         for idx, yield_ in step_pd.iterrows():
-            node = yield_['nodes']
+            source = yield_['source']
+            target = yield_['target']
             try:
-                first_bus = yield_.source
-                node = yield_.target
-                dist = nx.shortest_path_length(G, first_bus, node,
+                dist = nx.shortest_path_length(G, source, target,
                                                 weight='distance')
             except:
                 dist = 0
@@ -688,6 +859,8 @@ def distance_nodes_MV(G, nodes_mv, lineas_mt, trafos, fixed_distance):
             step_pd.loc[idx, 'distance']= dist
         # step_pd['distance'] = step_pd.apply(lambda b: nx.shortest_path_length(G, b.source, b.target, weight='distance'), axis=1)
         source_list = list(set(step_pd['source'].values))
+        
+        
         
         for s in source_list:
             id_max = step_pd.loc[step_pd['source']==s]['distance'].idxmax()
@@ -715,12 +888,9 @@ def tri_ph_dist(G, bus):
         
     
 def data_grouping(G, MV_hist_df , fixed_distance, final_der,
-                  lines_mv_oh_layer_original, lines_mv_ug_layer_original,
-                  Voltage_comp, Thermal_analysis, Prot_comp, lim_kVA):
+                  lines_mv_oh_layer_original, lines_mv_ug_layer_original, lim_kVA):
     
-    rand_bus = list(G.nodes.keys())[0]
-    ckt_name = rand_bus.split(rand_bus[min([i for i, c in enumerate(rand_bus) if c.isdigit()])])[0].split('BUSMV')[1]
-    # first_bus = 'BUSMV'+ckt_name+'1'
+
     first_bus = 'AFTERMETER'
     
     ###############################################################################################
@@ -848,57 +1018,36 @@ def data_grouping(G, MV_hist_df , fixed_distance, final_der,
         for source_key in path_dict:
             nodes_in_accKVAdf = list(set(path_dict[source_key]['nodes']).intersection(accumulated_kVA.index.values))
             try:
-                path_dict[source_key]['kVA'] += accumulated_kVA.loc[nodes_in_accKVAdf, 'kVA_val'].sum()
+                path_dict[source_key]['kVA'] += np.round(accumulated_kVA.loc[nodes_in_accKVAdf, 'kVA_val'].sum(),1)
             except:
                 pass
-            
-        if lim_kVA is True:    
-            if (Voltage_comp is True and Thermal_analysis is True and Prot_comp is True):
-                name_col = 'HB_M-VTP'
-            elif (Voltage_comp is True and Thermal_analysis is True and Prot_comp is False):
-                name_col = 'HB_M-VT'
-            elif (Voltage_comp is True and Thermal_analysis is False and Prot_comp is False):
-                name_col = 'HB_M-V'
         
-        else: 
-            if (Voltage_comp is True and Thermal_analysis is True and Prot_comp is True):
-                name_col = 'HB_VTP'
-            elif (Voltage_comp is True and Thermal_analysis is True and Prot_comp is False):
-                name_col = 'HB_VT'
-            elif (Voltage_comp is True and Thermal_analysis is False and Prot_comp is False):
-                name_col = 'HB_V'
-
-             
-        lines_mv_oh_layer_original.loc[:, name_col] = np.nan
+        lines_mv_oh_layer_original.loc[:, "HC_RES_SS"] = np.nan
         try:
-            lines_mv_ug_layer_original.loc[:, name_col] = np.nan
+            lines_mv_ug_layer_original.loc[:, "HC_RES_SS"] = np.nan
         except:
             pass
-        
+
         for source_key in path_dict:
             nodes_in_oh_layer = list(set(path_dict[source_key]['edges']).intersection(lines_mv_oh_layer_original['DSSNAME'].values))
             idx_oh_list = lines_mv_oh_layer_original.loc[lines_mv_oh_layer_original['DSSNAME'].isin(nodes_in_oh_layer)].index.values
-            lines_mv_oh_layer_original.loc[idx_oh_list, name_col] = path_dict[source_key]['kVA']
+            lines_mv_oh_layer_original.loc[idx_oh_list, "HC_RES_SS"] = path_dict[source_key]['kVA']
             
             try:
                 nodes_in_ug_layer = list(set(path_dict[source_key]['edges']).intersection(lines_mv_ug_layer_original['DSSNAME'].values))
                 idx_ug_list = lines_mv_ug_layer_original.loc[lines_mv_ug_layer_original['DSSNAME'].isin(nodes_in_ug_layer)].index.values
-                lines_mv_ug_layer_original.loc[idx_ug_list, name_col] = path_dict[source_key]['kVA']
+                lines_mv_ug_layer_original.loc[idx_ug_list, "HC_RES_SS"] = path_dict[source_key]['kVA']
             
             except:
                 pass
             
-    return lines_mv_oh_layer_original, lines_mv_ug_layer_original, name_col
+    return lines_mv_oh_layer_original, lines_mv_ug_layer_original
 
 #%%
 def data_grouping_iterative(G, chosen_buses_df , fixed_distance,
                             mv_lines_layer, lines_mv_oh_layer_original,
-                            lines_mv_ug_layer_original, Voltage_comp,
-                            Thermal_analysis, Prot_comp):
+                            lines_mv_ug_layer_original):
     
-    rand_bus = list(G.nodes.keys())[0]
-    ckt_name = rand_bus.split(rand_bus[min([i for i, c in enumerate(rand_bus) if c.isdigit()])])[0].split('BUSMV')[1]
-    # first_bus = 'BUSMV' + ckt_name + '1'
     first_bus = 'AFTERMETER'
 
     mt_3bus_list = nx.get_node_attributes(G,'num_phases') #list of 3phase mv buses on the whole circuit
@@ -1018,40 +1167,33 @@ def data_grouping_iterative(G, chosen_buses_df , fixed_distance,
                 pass
         
         #####################################################################################################
-            
-        if (Voltage_comp is True and Thermal_analysis is True and Prot_comp is True):
-            name_col = 'IT_DER_VTP'
-        elif (Voltage_comp is True and Thermal_analysis is True and Prot_comp is False):
-            name_col = 'IT_DER_VT'
-        elif (Voltage_comp is True and Thermal_analysis is False and Prot_comp is False):
-            name_col = 'IT_DER_V'
 
-        lines_mv_oh_layer_original.loc[:, name_col] = np.nan
+        lines_mv_oh_layer_original.loc[:, "HC_RES_LS"] = np.nan
         try:
-            lines_mv_ug_layer_original.loc[:, name_col] = np.nan
+            lines_mv_ug_layer_original.loc[:, "HC_RES_LS"] = np.nan
         except:
             pass
 
         for source_key in path_dict:
             nodes_in_oh_layer = list(set(path_dict[source_key]['edges']).intersection(lines_mv_oh_layer_original['DSSNAME'].values))
             idx_oh_list = lines_mv_oh_layer_original.loc[lines_mv_oh_layer_original['DSSNAME'].isin(nodes_in_oh_layer)].index.values
-            lines_mv_oh_layer_original.loc[idx_oh_list, name_col] = path_dict[source_key]['kVA']
+            lines_mv_oh_layer_original.loc[idx_oh_list, "HC_RES_LS"] = path_dict[source_key]['kVA']
             
             try:
                 nodes_in_ug_layer = list(set(path_dict[source_key]['edges']).intersection(lines_mv_ug_layer_original['DSSNAME'].values))
                 idx_ug_list = lines_mv_ug_layer_original.loc[lines_mv_ug_layer_original['DSSNAME'].isin(nodes_in_ug_layer)].index.values
-                lines_mv_ug_layer_original.loc[idx_ug_list, name_col] = path_dict[source_key]['kVA']
+                lines_mv_ug_layer_original.loc[idx_ug_list, "HC_RES_LS"] = path_dict[source_key]['kVA']
             
             except:
                 pass
             
                 
-    return lines_mv_oh_layer_original, lines_mv_ug_layer_original, name_col 
+    return lines_mv_oh_layer_original, lines_mv_ug_layer_original
 
 #%% WRITE DER AND STEPUP TRANSFORMER OPENDSS SENTENCES - allocates DER in bus list and assigns corresponding MV-LV transformer
 # Input: bus_list, installed_capacity: DER size
 # Output: Trafos: tx sentences, Trafos_Monitor, DERs: DERs'sentences
-def trafos_and_DERs_text_command(bus_list, installed_capacity):
+def trafos_and_DERs_text_command(bus_list, installed_capacity, der_type, der_type_val):
 
     DERs = []
     DERs_Monitor = []
@@ -1104,12 +1246,20 @@ def trafos_and_DERs_text_command(bus_list, installed_capacity):
         trafo_line_monitor += " Terminal=1 Mode=1\n"
         
         Trafos_Monitor.append(trafo_line_monitor) # Se añade a la lista de monitores de trafos
-
-        der_line = 'new generator.DER' + derName + ' bus1=' + busLV + '.1.2.3'
-        der_line += ' kV=' + kV_LowLL + ' phases=3 kW='
-        der_line += str(float(installed_capacity)) + ' PF=1 conn=wye kVA='
-        der_line += str(round(float(installed_capacity)*1.2,2))
-        der_line + ' Model=7 Vmaxpu=1.5 Vminpu=0.83 Balanced=no Enabled=yes' 
+        
+        if der_type == "INV":
+            der_line = 'new generator.DER' + derName + ' bus1=' + busLV + '.1.2.3'
+            der_line += ' kV=' + kV_LowLL + ' phases=3 kW='
+            der_line += str(float(installed_capacity)) + ' PF=1 conn=wye kVA='
+            der_line += str(np.round(float(installed_capacity)*1.2,2))
+            der_line + ' Model=7 Vmaxpu=1.5 Vminpu='+str(1/der_type_val)+' Balanced=yes Enabled=yes' 
+        
+        else:
+            der_line = 'new generator.DER' + derName + ' bus1=' + busLV + '.1.2.3'
+            der_line += ' kV=' + kV_LowLL + ' phases=3 kW='
+            der_line += str(float(installed_capacity)) + ' PF=1 conn=wye kVA='
+            der_line += str(np.round(float(installed_capacity)*1.2,2))
+            der_line + ' Model=1 Xdp='+str(der_type_val)+' Xdpp=0.020 Balanced=no Enabled=yes'
     
         DERs.append(der_line)
         
@@ -1119,89 +1269,107 @@ def trafos_and_DERs_text_command(bus_list, installed_capacity):
 # Overvoltage means magnitude in any phase goes above 1.05 p.u
 # Maximum voltage deviation in MT is 3% (based on IEEE Std. 1453-2015) and in BT is 5% (based on EPRI studies)
 # Input: DSScircuit, DSStext, dss_network,  Base_V, loadslv_buses, loadsmv_buses, capacity_i, NoDERsPF_Vbuses, Overvoltage_loads_df, Overvoltage_rest_df, Voltagedeviation_loads_df, Voltagedeviation_rest_df
-# Output: Overvoltage_loads_df: pd.DataFrame({ 'GDKWP':[capacity_i],'BUS':[busi_l],'Voltage' : [vbusi_l], 'POVERVOLTAGE' : [povervi_l] } ), Voltagedeviation_loads_df, Overvoltage_rest_df, Voltagedeviation_rest_df, all have the same format
+# Output: Overvoltage_loads_df: pd.DataFrame({ 'DER_kWp':[capacity_i],'BUS':[busi_l],'Voltage' : [vbusi_l], 'POVERVOLTAGE' : [povervi_l] } ), Voltagedeviation_loads_df, Overvoltage_rest_df, Voltagedeviation_rest_df, all have the same format
 
 #%% FIND THREE PHASE VOLTAGE UNBALANCE
 def voltageunbalance(DSScircuit, busname):
     DSScircuit.setActiveBus(busname.split('.')[0])
     
     if len(DSScircuit.ActiveBus.Nodes) == 3:
-        unbt = round((DSScircuit.ActiveBus.SeqVoltages[2] / DSScircuit.ActiveBus.SeqVoltages[1]),4)
+        unbt = np.round((DSScircuit.ActiveBus.SeqVoltages[2] / DSScircuit.ActiveBus.SeqVoltages[1]),4)
     else:
         unbt = np.nan
     return unbt
 #%%
 
 def pq_voltage(DSScircuit, DSStext, dss_network, Base_V, loadslv_buses,
-               loadsmv_buses, RegDevices, capacity_i, lv_groups, tx_groups,
+               loadsmv_buses, RegDevices, CapDevices, capacity_i, lv_groups, tx_groups,
                NoDERsPF_Vbuses, Overvoltage_loads_df, Overvoltage_rest_df,
                Voltagedeviation_loads_df, Voltagedeviation_rest_df,
                Voltagedeviation_reg_df, Voltageunbalance_df,
                Overvoltage_analysis, VoltageDeviation_analysis,
-               VoltageRegulation_analysis, VoltageUnbalance): 
+               VoltageRegulation_analysis, VoltageUnbalance,
+               max_v, max_lv_dev, max_mv_dev, max_v_unb, 
+               redo_sim, last_blacklisted_ov, last_blacklisted_vd, voltage_vals, overvoltage_vals, report_txt): 
 
     #%% PU CALCULATION
-    t1=time.time()
+    t1i=time.time()
     VBuses = pd.DataFrame(list(DSScircuit.AllBusVmag),
                           index=list(DSScircuit.AllNodeNames),
                           columns=['VOLTAGEV'])
     VBuses = VBuses[~VBuses.index.str.contains('aftermeter')]
     VBuses = VBuses[~VBuses.index.str.contains('_der')]
     VBuses=VBuses[~VBuses.index.str.contains('_swt')]
+    VBuses=VBuses[~VBuses.index.str.endswith('.4')]
+    
     V_buses = pd.DataFrame()
     V_buses['VOLTAGE'] = VBuses.VOLTAGEV/Base_V.BASE
     V_buses['LV_GROUP'] = Base_V.LV_GROUP
     V_buses['TX'] = Base_V.TX
-    t2=time.time()
+    t1f=time.time()
 
-    print('V_buses_pu: ' + str(t2 - t1))
+    print('V_buses_pu: ' + str(t1f - t1i))
     
     #%% OVERVOLTAGE MONITORING - Loads nodes and rest of nodes
     if Overvoltage_analysis is True:
+        t2i=time.time()
     
         #loads
         
         V_buses_loads = V_buses[V_buses.index.isin(loadslv_buses + loadsmv_buses)]; #pu loads buses dataframe
         vbusi_l = V_buses_loads.VOLTAGE.max()
         busi_l = V_buses_loads.VOLTAGE.idxmax()
-        povervi_l = V_buses_loads.VOLTAGE.gt(1.05).mean()
+        povervi_l = V_buses_loads.VOLTAGE.gt(max_v).mean()
         #rest
         V_buses_rest = V_buses[~V_buses.index.isin(loadslv_buses + loadsmv_buses)] #pu rest of buses dataframe
         vbusi_r = V_buses_rest.VOLTAGE.max()
         busi_r = V_buses_rest.VOLTAGE.idxmax()
-        povervi_r = V_buses_rest.VOLTAGE.gt(1.05).mean()
+        povervi_r = V_buses_rest.VOLTAGE.gt(max_v).mean()
         
-        OVl_List = list(set(V_buses_loads.loc[V_buses_loads['VOLTAGE'].gt(1.05), 'TX'].dropna()))
-        OVr_List = list(set(V_buses_rest.loc[V_buses_rest['VOLTAGE'].gt(1.05), 'TX'].dropna()))
+        OVl_List = list(set(V_buses_loads.loc[V_buses_loads['VOLTAGE'].gt(max_v), 'TX'].dropna()))
+        OVr_List = list(set(V_buses_rest.loc[V_buses_rest['VOLTAGE'].gt(max_v), 'TX'].dropna()))
+        
+        temp_OVlr_list = list(set(OVl_List + OVr_List))
+        
         # loadsmv_buses
         if not Overvoltage_loads_df.empty:
             OVl_List = list(set(list(Overvoltage_loads_df['BLACKLIST_TX'].values[-1]) + OVl_List))
             OVr_List = list(set(list(Overvoltage_rest_df['BLACKLIST_TX'].values[-1]) + OVr_List))
                 
-        if V_buses[V_buses['VOLTAGE'].gt(1.05)].index.empty:
+        if V_buses[V_buses['VOLTAGE'].gt(max_v)].index.empty:
             HCSTOP = False
         else: 
             HCSTOP = True if any(V_buses[V_buses['VOLTAGE'].gt(1.05)].index.str.startswith('busmv')) else False  
-        pd_tmp = pd.DataFrame({'GDKWP':[capacity_i], 'BUS':[busi_l],
+        
+        # Actualización Mayo 2023, paro de simulación debido a problemas en otros secundarios
+        if redo_sim:
+            for tx in temp_OVlr_list:
+                if tx in last_blacklisted_ov:
+                    HCSTOP = True
+        
+        overvoltage_vals[capacity_i] = V_buses
+        
+        pd_tmp = pd.DataFrame({'DER_kWp':[capacity_i], 'BUS':[busi_l],
                                'VOLTAGE': [vbusi_l],
-                               'POVERVOLTAGE' : [povervi_l],
                                'BLACKLIST_TX' : [OVl_List],
                                'HCSTOP':[HCSTOP]})
         Overvoltage_loads_df = pd.concat([Overvoltage_loads_df, pd_tmp],
                                          ignore_index=True)
-        pd_tmp = pd.DataFrame({'GDKWP': [capacity_i], 'BUS': [busi_r],
+        pd_tmp = pd.DataFrame({'DER_kWp': [capacity_i], 'BUS': [busi_r],
                                'VOLTAGE' : [vbusi_r],
-                               'POVERVOLTAGE' : [povervi_r],
                                'BLACKLIST_TX' : [OVr_List],
                                'HCSTOP':[HCSTOP]})
         Overvoltage_rest_df = pd.concat([Overvoltage_rest_df, pd_tmp],
                                         ignore_index=True)
-        t3=time.time()
-        print('Overvoltage processing: ' +str(t3-t2))
+        t2f=time.time()
+        msg = 'Análisis de sobretensión: ' +str(np.round(t2f-t2i,2)) + " s"
+        print(msg)
+        report_txt.append(msg)
     
     #%% VOLTAGE DEVIATION MONITORING (5% in LV, 3% in MV). For regulation nodes, a HCSTOP in 1 is reported if V excceeds 1/2 the bandwith of the regulator
     
     if VoltageDeviation_analysis is True:
+        t3i=time.time()
         #loads
         NoDERsPF_MVbuses_loads = NoDERsPF_Vbuses[NoDERsPF_Vbuses.index.isin(loadsmv_buses)] # pu loads buses dataframe at base power flow (no DER)
         NoDERsPF_LVbuses_loads = NoDERsPF_Vbuses[NoDERsPF_Vbuses.index.isin(loadslv_buses)]
@@ -1230,88 +1398,137 @@ def pq_voltage(DSScircuit, DSStext, dss_network, Base_V, loadslv_buses,
                                   index=NoDERsPF_MVbuses_rest.index,
                                   columns=['VDEVIATION', 'LV_GROUP', 'TX'])
         
-        VDl_List = list(set(devLV_loads.loc[devLV_loads['VDEVIATION'].gt(0.05), 'TX'].dropna()))
-        VDr_List = list(set(devLV_rest.loc[devLV_rest['VDEVIATION'].gt(0.05), 'TX'].dropna()))
+        VDl_List = list(set(devLV_loads.loc[devLV_loads['VDEVIATION'].gt(max_lv_dev), 'TX'].dropna()))
+        VDr_List = list(set(devLV_rest.loc[devLV_rest['VDEVIATION'].gt(max_lv_dev), 'TX'].dropna()))
+        temp_VDlr_list = list(set(VDl_List+ VDr_List)) # Secundarios blacklisteados de esta iteración
+        
         if not Voltagedeviation_loads_df.empty:
             VDl_List = list(set(list(Voltagedeviation_loads_df['BLACKLIST_TX'].values[-1]) + VDl_List))
             VDr_List = list(set(list(Voltagedeviation_rest_df['BLACKLIST_TX'].values[-1]) + VDr_List))
         
         devLV_all = pd.concat([devLV_loads, devLV_rest])
         devMV_all = pd.concat([devMV_loads, devMV_rest])
-        if devLV_all[devLV_all['VDEVIATION'].gt(0.05)].index.empty and devMV_all[devMV_all['VDEVIATION'].gt(0.03)].index.empty:
+        
+        if devLV_all[devLV_all['VDEVIATION'].gt(max_lv_dev)].index.empty and devMV_all[devMV_all['VDEVIATION'].gt(max_mv_dev)].index.empty:
             HCSTOP = False
         else: 
-            HCSTOP = True if not devMV_all[devMV_all['VDEVIATION'].gt(0.03)].index.empty else False  
-    
+            HCSTOP = True if not devMV_all[devMV_all['VDEVIATION'].gt(max_mv_dev)].index.empty else False  
+        
+        # 2023: se agrega esta verificación para contener el problema de desviación de tensión
+        # en las siguientes iteraciones.
+        if redo_sim:
+            for tx in temp_VDlr_list:
+                if tx in last_blacklisted_vd:
+                    HCSTOP = True
+                    
+        voltage_vals[capacity_i] = devLV_all            
         max_lvdev_l = devLV_loads.VDEVIATION.max()
         buslvi_l=devLV_loads.VDEVIATION.idxmax()
-        pdelvvi_l = devLV_loads.VDEVIATION.gt(0.05).mean()
+        pdelvvi_l = devLV_loads.VDEVIATION.gt(max_lv_dev).mean()
         if not devLV_rest.empty:
             max_lvdev_r = devLV_rest.VDEVIATION.max()
             buslvi_r=devLV_rest.VDEVIATION.idxmax()
-            pdelvvi_r = devLV_rest.VDEVIATION.gt(0.05).mean()
+            pdelvvi_r = devLV_rest.VDEVIATION.gt(max_lv_dev).mean()
         else:
             max_lvdev_r = np.nan
             buslvi_r=np.nan
             pdelvvi_r = np.nan
         max_mvdev_r = devMV_rest.VDEVIATION.max()
         busmvi_r =devMV_rest.VDEVIATION.idxmax()
-        pdemvvi_r = devMV_rest.VDEVIATION.gt(0.03).mean()
+        pdemvvi_r = devMV_rest.VDEVIATION.gt(max_mv_dev).mean()
         
         if not devMV_loads.empty:
             max_mvdev_l = devMV_loads.VDEVIATION.max()
             busmvi_l = devMV_loads.VDEVIATION.idxmax()
-            pdemvvi_l = devMV_loads.VDEVIATION.gt(0.03).mean()
-            tmp = pd.DataFrame({'GDKWP': [capacity_i], 'BUSLV': [buslvi_l],
+            pdemvvi_l = devMV_loads.VDEVIATION.gt(max_mv_dev).mean()
+            tmp = pd.DataFrame({'DER_kWp': [capacity_i], 'BUSLV': [buslvi_l],
                                 'VDEVIATIONLV' : [max_lvdev_l],
-                                'PDEVIATIONLV' : [pdelvvi_l],
                                 'BUSMV':[busmvi_l],
                                 'VDEVIATIONMV' : [max_mvdev_l],
-                                'PDEVIATIONMV' : [pdemvvi_l],
                                 'BLACKLIST_TX' : [VDl_List],
                                 'HCSTOP':[HCSTOP]})
             Voltagedeviation_loads_df = pd.concat([Voltagedeviation_loads_df, tmp],
                                                   ignore_index=True)
         else:
-            tmp = pd.DataFrame({'GDKWP': [capacity_i], 'BUSLV':[buslvi_l],
+            tmp = pd.DataFrame({'DER_kWp': [capacity_i], 'BUSLV':[buslvi_l],
                                 'VDEVIATIONLV': [max_lvdev_l],
-                                'PDEVIATIONLV': [pdelvvi_l],
                                 'BLACKLIST_TX': [VDl_List],
                                 'HCSTOP': [HCSTOP]})
             Voltagedeviation_loads_df = pd.concat([Voltagedeviation_loads_df, tmp],
                                                   ignore_index=True)
     
-        tmp = pd.DataFrame({'GDKWP': [capacity_i], 'BUSLV': [buslvi_r],
+        tmp = pd.DataFrame({'DER_kWp': [capacity_i], 'BUSLV': [buslvi_r],
                             'VDEVIATIONLV' : [max_lvdev_r],
-                            'PDEVIATIONLV' : [pdelvvi_r], 'BUSMV': [busmvi_r],
                             'VDEVIATIONMV' : [max_mvdev_r],
-                            'PDEVIATIONMV' : [pdemvvi_r],
                             'BLACKLIST_TX' : [VDr_List],
                             'HCSTOP':[HCSTOP] } )
         Voltagedeviation_rest_df = pd.concat([Voltagedeviation_rest_df, tmp],
                                              ignore_index=True)
-
+        
+        t3f=time.time()
+        msg = 'Análisis de desviación de tensión: ' +str(np.round(t3f-t3i,2))+ " s"
+        print(msg)
+        report_txt.append(msg)
+        
     #%% Voltage deviation at regulator devices (autotransformers and capacitors)
     if VoltageRegulation_analysis is True:
+        t4i = time.time()
+        
         try:
-            for reg in list(RegDevices['BusInstalled']):
-                buslist = [reg.split('.')[0].lower()+'.'+ph for ph in reg.split('.')[1:]]
-                bndwdth = RegDevices.loc[RegDevices['BusInstalled']==reg, 'Bandwidth'].iloc[-1] 
-                if max([abs(NoDERsPF_Vbuses['voltage'][busph] - V_buses['VOLTAGE'][busph]) for busph in buslist]) > bndwdth/2:
-                    HCSTOP= True
-                else: 
-                    HCSTOP= False
-            tmp = pd.DataFrame({'GDKWP': [capacity_i], 'BUSREG': [reg],
-                                'HCSTOP': [HCSTOP]})
+            max_v_dif = 0
+            max_bus = ""
+            HCSTOP = False
+            
+            try:
+                for reg in list(RegDevices['BUSINST']):
+                    buslist = [reg.split('.')[0].lower()+'.'+ph for ph in reg.split('.')[1:]]
+                    bndwdth = RegDevices.loc[RegDevices['BUSINST']==reg, 'BANDWIDTH'].iloc[-1] 
+                    vreg = RegDevices.loc[RegDevices['BUSINST']==reg, 'VREG'].iloc[-1]
+                    temp_max_v_dif_reg = max([abs(NoDERsPF_Vbuses['VOLTAGE'][busph] - V_buses['VOLTAGE'][busph]) for busph in buslist])
+                    if  temp_max_v_dif_reg > ((vreg + bndwdth/2)/vreg)-1 : 
+                        HCSTOP= True
+                    else: 
+                        HCSTOP= False
+                    
+                    if temp_max_v_dif_reg  > max_v_dif:
+                        max_v_dif = temp_max_v_dif_reg
+                        max_bus = reg
+            except:
+                pass
+                
+            try:
+                for cap in list(CapDevices['BUSINST']):
+                    buslist = [cap.split('.')[0].lower()+'.'+ph for ph in cap.split('.')[1:]]
+                    bndwdth = CapDevices.loc[CapDevices['BUSINST']==cap, "OBJ_MAX"].iloc[-1] - CapDevices.loc[CapDevices['BUSINST']==cap, "OBJ_MIN"].iloc[-1] # Los dos valores están en PU
+                    temp_max_v_dif_cap = max([abs(NoDERsPF_Vbuses['VOLTAGE'][busph] - V_buses['VOLTAGE'][busph]) for busph in buslist])
+                    if  temp_max_v_dif_cap > (bndwdth/2): 
+                        HCSTOP= True
+                    else: 
+                        HCSTOP= False
+                    
+                    if temp_max_v_dif_cap  > max_v_dif:
+                        max_v_dif = temp_max_v_dif_cap
+                        max_bus = cap
+            except:
+                pass
+
+            tmp = pd.DataFrame({'DER_kWp': [capacity_i], 'BUSREG': [max_bus],
+                                'VDIF':[max_v_dif], 'HCSTOP': [HCSTOP]})
+            
             Voltagedeviation_reg_df = pd.concat([Voltagedeviation_reg_df, tmp],
                                                 ignore_index=True)
         except:
             pass
-        t4=time.time()
-        print('Voltage deviation processing: ' +str(t4-t3))
+        
+        t4f=time.time()
+        msg = 'Análisis de regulación de tensión: ' +str(np.round(t4f-t4i,2))+ " s"
+        print(msg)
+        report_txt.append(msg)
+        
     
     #%% VOLTAGE UNBALANCE
     if VoltageUnbalance is True:
+        t5i = time.time()
         # Greater of all three phase nodes
         buseslist = pd.DataFrame(columns=['BUS','LV_GROUP', 'TX', 'UNBALANCE'])
         buseslist['BUS'] = list(V_buses.index)
@@ -1321,7 +1538,7 @@ def pq_voltage(DSScircuit, DSStext, dss_network, Base_V, loadslv_buses,
         buseslist['UNBALANCE'] = buseslist['BUS'].apply(lambda b: voltageunbalance(DSScircuit, b))
         maxunb=buseslist.UNBALANCE.max()
         busunb=buseslist.UNBALANCE.idxmax()
-        buseslist = buseslist[buseslist.UNBALANCE.ge(0.03)]
+        buseslist = buseslist[buseslist.UNBALANCE.ge(max_v_unb)]
     
         VU_List = list(set(buseslist.TX.dropna()))
         if buseslist.empty:
@@ -1336,15 +1553,31 @@ def pq_voltage(DSScircuit, DSStext, dss_network, Base_V, loadslv_buses,
                     VU_List = list(set(list(Voltageunbalance_df['BLACKLIST_TX'].values[-1]) + VU_List))
                     HCSTOP = False
     
-        tmp = pd.DataFrame({'GDKWP': [capacity_i], 'BUS': [busunb],
+        tmp = pd.DataFrame({'DER_kWp': [capacity_i], 'BUS': [busunb],
                             'UNBALANCE': [maxunb],'BLACKLIST_TX': [VU_List],
                             'HCSTOP': [HCSTOP]})
         Voltageunbalance_df = pd.concat([Voltageunbalance_df, tmp],
                                         ignore_index=True)
-
-    return VBuses, Overvoltage_loads_df, Voltagedeviation_loads_df,\
-        Overvoltage_rest_df, Voltagedeviation_rest_df,\
-        Voltagedeviation_reg_df, Voltageunbalance_df
+        t5f=time.time()
+        msg = 'Procesamiento de desbalance de tensión: ' +str(np.round(t5f-t5i,2))+ " s"
+        print(msg)
+        report_txt.append(msg)
+    
+    if Overvoltage_analysis and VoltageDeviation_analysis:
+        pass
+    elif Overvoltage_analysis and not VoltageDeviation_analysis:
+        temp_VDlr_list = []
+        voltage_vals = pd.DataFrame()
+    elif not Overvoltage_analysis and VoltageDeviation_analysis:
+        temp_OVlr_list = []
+        overvoltage_vals = pd.DataFrame()
+    else:
+        temp_OVlr_list = []
+        temp_VDlr_list = []
+        voltage_vals = pd.DataFrame()
+        overvoltage_vals = pd.DataFrame()
+        
+    return VBuses, Overvoltage_loads_df, Voltagedeviation_loads_df, Overvoltage_rest_df, Voltagedeviation_rest_df, Voltagedeviation_reg_df, Voltageunbalance_df,  temp_OVlr_list, temp_VDlr_list, voltage_vals, overvoltage_vals, report_txt
 
 #%% LINE LENGTH ASSIGNATION - dataframe.apply function
 # Input: DSScircuit, name, normalAmpsDic
@@ -1376,12 +1609,12 @@ def linelvgroup(g,line_lv_groups):
 
 #%% THERMAL IMPACT IN LINES AND TRANSFORMERS - Checks if any line of transformer has a loading over 1.00 p.u 
 # Input: DSScircuit, normalAmpsDic,  capacity_i, Thermal_loading_lines_df, Thermal_loading_tx_df
-# Output: Thermal_loading_lines_df : pd.DataFrame({ 'GDKWP':[capacity_i],'Line':[txi],'LOADING' : [max_loading], 'POVERLOADTX' : [ptloadingi] } ), Thermal_loading_tx_df : pd.DataFrame({ 'GDKWP':[capacity_i],'Line':[txi],'LOADING' : [max_loading], 'POVERLOADTX' : [ptloadingi] } )
+# Output: Thermal_loading_lines_df : pd.DataFrame({ 'DER_kWp':[capacity_i],'Line':[txi],'LOADING' : [max_loading], 'POVERLOADTX' : [ptloadingi] } ), Thermal_loading_tx_df : pd.DataFrame({ 'DER_kWp':[capacity_i],'Line':[txi],'LOADING' : [max_loading], 'POVERLOADTX' : [ptloadingi] } )
 
 def thermal_Lines_Tx(DSScircuit, DSStext, normalAmpsDic,
                      capacity_i, line_lv_groups, tx_groups,
                      Thermal_loading_lines_df, Thermal_loading_tx_df,
-                     name_file_created, linelvgroups, Thermal_analysis): # Most code from auxfns.lineCurrents
+                     name_file_created, linelvgroups, Thermal_analysis, report_txt): # Most code from auxfns.lineCurrents
     
     if Thermal_analysis is True: 
         # LINES
@@ -1416,7 +1649,7 @@ def thermal_Lines_Tx(DSScircuit, DSStext, normalAmpsDic,
         else: 
             HCSTOP = True if any(CurrentDF[CurrentDF['CURRENT'].gt(1.00)].index.str.startswith('mv')) else False
     
-        tmp = pd.DataFrame({'GDKWP':[capacity_i], 'LINE': [linei],
+        tmp = pd.DataFrame({'DER_kWp':[capacity_i], 'LINE': [linei],
                             'CURRENT' : [max_loading],
                             'LENGTHOVERLOADED' : [lenloadingi],
                             'BLACKLIST_TX' : [LO_List], 'HCSTOP':[HCSTOP]})
@@ -1479,20 +1712,21 @@ def thermal_Lines_Tx(DSScircuit, DSStext, normalAmpsDic,
         else: 
             HCSTOP = True if len(TO_List) == len(set(tx_groups.LV_GROUP)) else False
     
-        tmp = pd.DataFrame({'GDKWP': [capacity_i], 'TX':[txi], 'LOADING' : [max_loading],
-               'POVERLOADTX' : [ptloadingi], 'BLACKLIST_TX': [TO_List],
+        tmp = pd.DataFrame({'DER_kWp': [capacity_i], 'TX':[txi], 'LOADING' : [max_loading], 'BLACKLIST_TX': [TO_List],
                'HCSTOP': [HCSTOP]})
         Thermal_loading_tx_df = pd.concat([Thermal_loading_tx_df, tmp],
                                           ignore_index=True)
         
         end = time.time()
         sim_time = end - start
-        print('Thermal analysis: '+str(round(sim_time,2))+' sec.')
+        msg = 'Análisis térmico: '+str(np.round(sim_time,2))+' s'
+        print(msg)
+        report_txt.append(msg)
     
     else:
         CurrentDF = pd.DataFrame()
     
-    return Thermal_loading_lines_df, Thermal_loading_tx_df, CurrentDF
+    return Thermal_loading_lines_df, Thermal_loading_tx_df, CurrentDF, report_txt
 
 #%% MV GRAPH CREATION
 # Input: nodos_mt, lineas_mt, trafos
@@ -1528,7 +1762,7 @@ def circuit_graph(nodes_mv, lines_mv):
     
     end = time.time()
     sim_time = end - start
-    print('Graph time: '+str(round(sim_time,2))+' sec.')
+    print('Graph time: '+str(np.round(sim_time,2))+' sec.')
     
     return G
 
@@ -1549,13 +1783,13 @@ def circuit_graph_mv(nodes_mv, lines_mv):
     for idx in nodes_mv.index:        
         bus = nodes_mv.loc[idx, 'BUS']
         node_conn = nodes_mv.loc[idx, 'NODES']
-        point = nodes_mv.loc[idx, 'geometry']
+        #point = nodes_mv.loc[idx, 'geometry']
         volts = nodes_mv.loc[idx, 'BASEKV_LN']
         phases = nodes_mv.loc[idx, 'PHASES']
-        x_ = point.x
-        y_ = point.y
-        posic = (x_, y_)
-        G.add_node(bus, conn=node_conn, pos=posic, voltage=volts, num_phases=phases)
+        #x_ = point.x
+        #y_ = point.y
+        # posic = (x_, y_)
+        G.add_node(bus, conn=node_conn, voltage=volts, num_phases=phases)
     
     nodes_mv.index = nodes_mv.loc[:, 'BUS'] #ordena el dataframe por buses
     
@@ -1564,13 +1798,9 @@ def circuit_graph_mv(nodes_mv, lines_mv):
         bus1 = lines_mv.loc[idx, 'bus1']
         bus2 = lines_mv.loc[idx, 'bus2']
         nomvolt = lines_mv.loc[idx, 'NOMVOLT']
-        line = lines_mv.loc[idx, 'geometry']
-        dist = line.length
+        dist = lines_mv.loc[idx, 'LENGTH']
         name = lines_mv.loc[idx, 'DSSNAME']
-        conns = lines_mv.loc[idx, 'conns']
-        geom = lines_mv.loc[idx, 'geom']
-        G.add_edge(bus1, bus2, distance=dist, line_name=name,
-                   conns=conns, geom=geom, bus1=bus1, bus2=bus2)
+        G.add_edge(bus1, bus2, distance=dist, line_name=name, bus1=bus1, bus2=bus2)
         nodes_mv.loc[bus1, 'NOMVOLT'] = nomvolt
         nodes_mv.loc[bus2, 'NOMVOLT'] = nomvolt
         G.nodes[bus1].update({'NOMVOLT': nomvolt})
@@ -1578,7 +1808,7 @@ def circuit_graph_mv(nodes_mv, lines_mv):
     
     end = time.time()
     sim_time = end - start
-    print('Graph lv time: '+ str(round(sim_time,2)) +' sec.')
+    print('Graph lv time: '+ str(np.round(sim_time,2)) +' sec.')
     
     return G
 #%% FINDS THE ELEMENT OF THE PROTECTION DEVICE - dataframe.apply function
@@ -1586,12 +1816,12 @@ def circuit_graph_mv(nodes_mv, lines_mv):
 # Output: element name
 
 def find_element(pdevice, ini_bus, firstLine, G):
-    # if pdevice in ['AFTERMETER', ini_bus]:
-    #     elem = 'line.'+firstLine
+
     us_bus = [n for n in G.predecessors(pdevice)][0] #Upstream bus
     
     if us_bus == ini_bus:
-        ckt_name = ini_bus.split(ini_bus[min([i for i, c in enumerate(ini_bus) if c.isdigit()])])[0].split('BUSMV')[1]
+        # ckt_name = ini_bus.split(ini_bus[min([i for i, c in enumerate(ini_bus) if c.isdigit()])])[0].split('BUSMV')[1]
+        ckt_name = firstLine.split("MV3P")[1].split("0")[0]
         elem = 'line.MV3P'+ckt_name+'0'
     else:
         elem = 'line.'+G.edges[us_bus, pdevice]['line_name']
@@ -1617,17 +1847,17 @@ def find_conn(pdevice, ini_bus, G):
 # Output: recloser bus 
 
 def find_recloserelem(G, pdevice, fusibles, reclosers):
-    if pdevice in fusibles['bus1']:
-        fuse_idx = fusibles[fusibles['bus1']==pdevice].index.values[0] #index to loc
-            
-        if (fusibles.loc[fuse_idx, 'SAVE'] == 'SI') or (fusibles.loc[fuse_idx, 'SAVE'] == 'YES'):
+    if pdevice.split(".")[0] in list(fusibles['bus2']):
+        fuse_idx = fusibles[fusibles['bus2']==pdevice.split(".")[0] ].index.values[0] #index to loc
+        
+        if (fusibles.loc[fuse_idx, 'SAVE'].upper() == 'SI') or (fusibles.loc[fuse_idx, 'SAVE'].upper() == 'YES'):
             recloser_ID = fusibles.loc[fuse_idx, 'COORDINATE']
+            recloser_idx = reclosers.loc[reclosers['DSSNAME'] == recloser_ID].index.values[0]
+            recloser_bus1 = reclosers.loc[recloser_idx, 'bus1']
+            recloser_bus2 = reclosers.loc[recloser_idx, 'bus2']
+            recloser_elem = 'line.'+G.edges[recloser_bus1, recloser_bus2]['line_name']
         else:
-            recloser_ID = np.nan
-        recloser_idx = reclosers.loc[reclosers['PDID'] == recloser_ID].index.values
-        recloser_bus1 = reclosers.loc[recloser_idx, 'bus1']
-        recloser_bus2 = reclosers.loc[recloser_idx, 'bus2']
-        recloser_elem = 'line.'+G.edges[recloser_bus1, recloser_bus2]['line_name']
+            recloser_elem = np.nan
     else:
         recloser_elem = np.nan
     
@@ -1637,13 +1867,19 @@ def find_recloserelem(G, pdevice, fusibles, reclosers):
 # Input: pdevice, ini_bus, G
 # Output: CircuitBreakDvRoR, CircuitBreakDvFF_BFC
 
-def pDevices(G, firstLine, fusibles, reclosers): 
-    bus_list_FF_BFC = list(set([(fusibles.loc[x,'bus1'], fusibles.loc[x,'bus2']) for x in fusibles.index.values] + [(reclosers.loc[y,'bus1'], reclosers.loc[y,'bus2']) for y in reclosers.index.values]))
-    bus_list_DvRoR = [(reclosers.loc[y,'bus1'], reclosers.loc[y,'bus2']) for y in reclosers.index.values]
+def pDevices(G, firstLine, fusibles, reclosers, FF_analysis, BFC_analysis): 
+
+    # Se modifica internamente el dataframe de fusibles para que solo considere el fusible que tiene recloser asociado
+    if (BFC_analysis is True) and (FF_analysis is False):
+        fusibles = fusibles[~fusibles["SAVE"].isin([None, "No", "NO", "NULL", "", " "])]
+    else:
+        pass
+
+    bus_list_FF_BFC = list(set([(fusibles.loc[x, 'bus1'], fusibles.loc[x, 'bus2']) for x in fusibles.index] + [(reclosers.loc[y, 'bus1'], reclosers.loc[y, 'bus2']) for y in reclosers.index]))
+    bus_list_DvRoR = [(reclosers.loc[y, 'bus1'], reclosers.loc[y, 'bus2']) for y in reclosers.index]
 
     #bus de inicio: 
-    rand_bus = bus_list_FF_BFC[0][0]
-    ini_bus = rand_bus.split(rand_bus[min([i for i, c in enumerate(rand_bus) if c.isdigit()])])[0]+'1' #BUSMV+nombrecircuito+1
+    ini_bus = 'AFTERMETER'
     
     #Dataframe initialization 
     # pdevice_df = pd.DataFrame(np.nan, index=devices_bus_list, columns=['Element', 'Installed_bus', 'Upstream_bus', 'Downstream_bus', 'Furthest_bus', , 'Furthest_zone_bus','Furthest_zone_bus_dist'])
@@ -1666,7 +1902,8 @@ def pDevices(G, firstLine, fusibles, reclosers):
     downstream_buses_pdevice = {}
     start = time.time()
     start1 = time.time()
-    #element definition
+    #element definition    
+    
     for pdevice in p_RoR_list:
         downstream_buses_pdevice[pdevice] = {}
         # distance and descendants dataframe per pdevice
@@ -1683,11 +1920,11 @@ def pDevices(G, firstLine, fusibles, reclosers):
         back_up_bus = downstream_buses_pdevice[pdevice]['dataframe'].loc[max_gnal_idx, 'descendants']
         
         downstream_buses_pdevice[pdevice]['FurthestBusBackUp'] = back_up_bus + find_conn(pdevice, ini_bus, G)
-        downstream_buses_pdevice[pdevice]['Furthest_bus_dist'] = downstream_buses_pdevice[pdevice]['dataframe'].loc[max_gnal_idx, 'distance']       
+        downstream_buses_pdevice[pdevice]['Furthest_bus_dist'] = downstream_buses_pdevice[pdevice]['dataframe'].loc[max_gnal_idx, 'distance']   
 
         # pdevice element characteristics
         downstream_buses_pdevice[pdevice]['Element'] = find_element(pdevice, ini_bus, firstLine, G)
-        downstream_buses_pdevice[pdevice]['BusInstalled'] = pdevice+find_conn(pdevice, ini_bus, G)
+        downstream_buses_pdevice[pdevice]['BusInstalled'] = pdevice + find_conn(pdevice, ini_bus, G)
             
     # Furthest_bus_zone 
     for pdevice in p_RoR_list:
@@ -1704,9 +1941,10 @@ def pDevices(G, firstLine, fusibles, reclosers):
     
     CircuitBreakDvRoR = pd.DataFrame.from_dict(downstream_buses_pdevice, orient='index'); del CircuitBreakDvRoR['dataframe']
     
+    
     end = time.time()
     sim_time = end - start1
-    print('Primera parte: '+str(round(sim_time,5))+' sec.')
+    print('Primera parte: '+str(np.round(sim_time,5))+' sec.')
         
     #%% FF_BFC dataframe ###############################################  
       
@@ -1723,7 +1961,7 @@ def pDevices(G, firstLine, fusibles, reclosers):
     
     end = time.time()
     sim_time = end - start2
-    print('Segunda parte: '+str(round(sim_time,5))+' sec.')
+    print('Segunda parte: '+str(np.round(sim_time,2))+' sec.')
         
     return CircuitBreakDvRoR, CircuitBreakDvFF_BFC
 #%% PROTECTION DEVICES VERIFICATION - Forward fault current increase and Breaker Fuse descoordination
@@ -1734,9 +1972,12 @@ def pDevices(G, firstLine, fusibles, reclosers):
 # Input: DSScircuit, DSStext, dss_network,firstLine, snapshottime, snapshotdate, kW_sim, kVAr_sim,  capacity_i, Trafos, DERs, No_DER_FFCurrents, FFCurrents, No_DER_BFCCurrents, BFCCurrents, faulttypes
 # Output: FFCurrents, BFCCurrents
 
-def FF_BFC_Current(DSScircuit, DSStext, dss_network,firstLine, snapshottime, snapshotdate, kW_sim, kVAr_sim,  capacity_i, Trafos, DERs, No_DER_FFCurrents, FFCurrents, No_DER_BFCCurrents, BFCCurrents, faulttypes, FF_analysis, BFC_analysis):
+def FF_BFC_Current(DSScircuit, DSStext, dss_network,firstLine, snapshottime, snapshotdate, circuit_demand, kW_sim, kVAr_sim,  
+                    capacity_i, Trafos, DERs, No_DER_FFCurrents, FFCurrents, No_DER_BFCCurrents, BFCCurrents, faulttypes, 
+                    FF_analysis, BFC_analysis, max_increase_ff, max_increase_bfc, report_txt):
     
     if (FF_analysis or BFC_analysis) is True:
+        start = time.time()
         #%% Calculate the hour and date in the simulation
         h, m = snapshottime.split(':')
         if m != '00' or m != '15' or m != '30' or m != '45':  # round sim minutes
@@ -1758,18 +1999,28 @@ def FF_BFC_Current(DSScircuit, DSStext, dss_network,firstLine, snapshottime, sna
         snapshottime = h + ':' + m
         day_ = snapshotdate.replace('/', '')
         day_ = day_.replace('-', '')
+        daily_strtime = str(day_ + snapshottime.replace(':', ''))         
         hora_sec = snapshottime.split(':')
+
+        # P and Q to match
+        V_to_be_matched = 0
+        for ij in range(len(circuit_demand)):
+            temp_a = circuit_demand[ij][0]  # day
+            temp_b = circuit_demand[ij][1]  # hour                    
+            if str(temp_a.replace('/', '') + temp_b.replace(':', '')) == daily_strtime:                        
+                V_to_be_matched = circuit_demand[ij][4]  # Voltage
+                break
         
         #%% Fault type studies
         # defines the terminals necessary for each type of fault. Dictionary containing: Fault type: [terminal conection for bus 1, terminal conection for bus2, number of phases]
         faulttypeterminals = {'ABC':['.1.2','.3.3', '2'], 'ABCG':['.1.2.3','.0.0.0','3'], 'AB':['.1','.2','1'], 'BC':['.2','.3','1'], 'AC':['.1','.3','1'], 'ABG':['.1.1','.2.0','2'], 'BCG':['.2.2','.3.0','2'], 'ACG':['.1.1','.3.0','2'], 'AG':['.1','.0','1'], 'BG':['.2','.0','1'], 'CG':['.3','.0','1']}
         HCSTOP = False
         if FFCurrents.empty:
-            columnslist=list([ 'GDKWP', 'Element', 'FaultedBus']+faulttypes+['HCSTOP'])
+            columnslist=list([ 'DER_kWp', 'Element', 'FaultedBus']+faulttypes+['HCSTOP'])
             FFCurrents = pd.DataFrame(columns=columnslist)
     
         if BFCCurrents.empty:
-                columnslist=list([ 'GDKWP', 'FuseElement', 'BreakerElement','FaultedBus']+faulttypes+['HCSTOP'])
+                columnslist=list([ 'DER_kWp', 'FuseElement', 'BreakerElement','FaultedBus']+faulttypes+['HCSTOP'])
                 BFCCurrents = pd.DataFrame(columns=columnslist)
     
         for element, faultedbus in list(No_DER_FFCurrents.index):
@@ -1810,9 +2061,14 @@ def FF_BFC_Current(DSScircuit, DSStext, dss_network,firstLine, snapshottime, sna
                 temp_row_BFC.append(faultedbus)
             else:
                 breakerelement = np.nan
+            
             for faulttype in faulttypes:
                 if faulttype not in faultlabels:
                     temp_row_FF.append(np.nan)
+                    try:
+                        temp_row_BFC.append(np.nan)
+                    except:
+                        pass
                 else:
                     # Machines inicialization simulation
                     DSStext.Command = 'clear'
@@ -1822,8 +2078,9 @@ def FF_BFC_Current(DSScircuit, DSStext, dss_network,firstLine, snapshottime, sna
                     DSStext.Command = 'Set number=1'  # Number of steps to be simulated
                     DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
                     DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time
-                    DSStext.Command = 'batchedit load.n_.* kW=' + str(kW_sim[0]) # kW corrector
-                    DSStext.Command = 'batchedit load.n_.* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+                    DSStext.Command = 'batchedit load..* kW=' + str(kW_sim[0]) # kW corrector
+                    DSStext.Command = 'batchedit load..* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+                    DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched) # Tensión en cabecera
                     for tx in Trafos:
                         DSStext.Command = tx
                     for der in DERs:
@@ -1847,25 +2104,36 @@ def FF_BFC_Current(DSScircuit, DSStext, dss_network,firstLine, snapshottime, sna
                     temp_currents = DSScircuit.ActiveElement.CurrentsMagAng
                     maxIchange = max(list(np.divide([temp_currents[i] for i in currentspositions[faulttype]], No_DER_FFCurrents[faulttype][element,faultedbus])))
                     temp_row_FF.append(maxIchange)
-                    HCSTOP = False if maxIchange < 1.1 else True
+                    HCSTOP = False if maxIchange < max_increase_ff else True
                     #BFC
-                    if not np.isnan(breakerelement):
+                    
+                    if type(breakerelement) is str:
                         fuseD = np.array([temp_currents[i] for i in currentspositions[faulttype]]) - np.array(No_DER_BFCCurrents[faulttype][element,breakerelement,faultedbus][0])
                         DSScircuit.setActiveElement(breakerelement)
                         breaker_currents = DSScircuit.ActiveElement.CurrentsMagAng
                         breakerD = np.array([breaker_currents[i] for i in currentspositions[faulttype]]) - np.array(No_DER_BFCCurrents[faulttype][element,breakerelement,faultedbus][1])
-                        maxIdelta=round(max(fuseD-breakerD),2)
+                        maxIdelta=round(max(abs(fuseD-breakerD)),2)
                         temp_row_BFC.append(maxIdelta)
-                        HCSTOP = False if maxIdelta < 100 else True
-            if not np.isnan(breakerelement):
+                        HCSTOP = False if maxIdelta < max_increase_bfc else True
+            
+            if type(breakerelement) is str:
                 tmp = pd.DataFrame([temp_row_BFC+[HCSTOP]], index=[0],
                                    columns=list(BFCCurrents.columns))
+                
                 BFCCurrents = pd.concat([BFCCurrents, tmp], ignore_index=True)
+            
             tmp = pd.DataFrame([temp_row_FF+[HCSTOP]], index=[0],
                                columns=list(FFCurrents.columns))
             FFCurrents = pd.concat([FFCurrents, tmp], ignore_index=True)
+            
+        end = time.time()
+        sim_time = end - start
+        msg = "Análisis de aumento de corriente de falla y coordinación recloser/fusible " +str(np.round(sim_time,2))+' s'
+        print(msg)
+        report_txt.append(msg)
+        
     
-    return FFCurrents, BFCCurrents
+    return FFCurrents, BFCCurrents, report_txt
 
 #%% PROTECTION DEVICES VERIFICATION - Reduction of reach verification
 # Iverter contribution to fault current: 1.2 (120% according to SANDIA Protections report)
@@ -1874,10 +2142,11 @@ def FF_BFC_Current(DSScircuit, DSStext, dss_network,firstLine, snapshottime, sna
 # Output: RORCurrents
 def ReductionReach(DSScircuit, DSStext, dss_network, firstLine,
                    snapshottime, snapshotdate, kW_sim, kVAr_sim,
-                   capacity_i, Trafos, DERs, No_DER_RoRCurrents,
-                   RoRCurrents, faulttypes, RoR_analysis):
+                   circuit_demand, capacity_i, Trafos, DERs, No_DER_RoRCurrents,
+                   RoRCurrents, faulttypes, RoR_analysis, max_reduction, report_txt):
     
     if RoR_analysis is True:
+        start = time.time()
         #%% Calculate the hour and date in the simulation
         h, m = snapshottime.split(':')
         if m != '00' or m != '15' or m != '30' or m != '45':  # round sim minutes
@@ -1899,14 +2168,24 @@ def ReductionReach(DSScircuit, DSStext, dss_network, firstLine,
         snapshottime = h + ':' + m
         day_ = snapshotdate.replace('/', '')
         day_ = day_.replace('-', '')
+        daily_strtime = str(day_ + snapshottime.replace(':', ''))         
         hora_sec = snapshottime.split(':')
+
+        # P and Q to match
+        V_to_be_matched = 0
+        for ij in range(len(circuit_demand)):
+            temp_a = circuit_demand[ij][0]  # day
+            temp_b = circuit_demand[ij][1]  # hour                    
+            if str(temp_a.replace('/', '') + temp_b.replace(':', '')) == daily_strtime:                        
+                V_to_be_matched = circuit_demand[ij][4]  # Voltage
+                break
         
         #%% Fault type studies
         # defines the terminals necessary for each type of fault. Dictionary containing: Fault type: [terminal conection for bus 1, terminal conection for bus2, number of phases]
         faulttypeterminals = {'ABC':['.1.2','.3.3', '2'], 'ABCG':['.1.2.3','.0.0.0','3'], 'AB':['.1','.2','1'], 'BC':['.2','.3','1'], 'AC':['.1','.3','1'], 'ABG':['.1.1','.2.0','2'], 'BCG':['.2.2','.3.0','2'], 'ACG':['.1.1','.3.0','2'], 'AG':['.1','.0','1'], 'BG':['.2','.0','1'], 'CG':['.3','.0','1']}
     
         if RoRCurrents.empty:
-            columnslist=list([ 'GDKWP', 'Element', 'FaultedBus']+faulttypes+['HCSTOP'])
+            columnslist=list([ 'DER_kWp', 'Element', 'FaultedBus']+faulttypes+['HCSTOP'])
             RoRCurrents = pd.DataFrame(columns=columnslist)
     
         for element, faultedbus in list(No_DER_RoRCurrents.index):
@@ -1951,8 +2230,9 @@ def ReductionReach(DSScircuit, DSStext, dss_network, firstLine,
                     DSStext.Command = 'Set number=1'  # Number of steps to be simulated
                     DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
                     DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time
-                    DSStext.Command = 'batchedit load.n_.* kW=' + str(kW_sim[0]) # kW corrector
-                    DSStext.Command = 'batchedit load.n_.* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+                    DSStext.Command = 'batchedit load..* kW=' + str(kW_sim[0]) # kW corrector
+                    DSStext.Command = 'batchedit load..* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+                    DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched) # Tensión en cabecera
                     for tx in Trafos:
                         DSStext.Command = tx
                     for der in DERs:
@@ -1977,12 +2257,19 @@ def ReductionReach(DSScircuit, DSStext, dss_network, firstLine,
                     temp_currents = DSScircuit.ActiveElement.CurrentsMagAng
                     minIchange=min(np.divide([temp_currents[i] for i in currentspositions[faulttype]], No_DER_RoRCurrents[faulttype][element,faultedbus]))
                     temp_row.append(minIchange)
-                    HCSTOP = False if minIchange > 0.90 else True
+                    HCSTOP = False if minIchange > max_reduction else True
     
             tmp = pd.DataFrame([temp_row+[HCSTOP]], index=[0],
                                columns=list(RoRCurrents.columns))
             RoRCurrents = pd.concat([RoRCurrents, tmp], ignore_index=True)
-    return RoRCurrents
+        
+        end = time.time()
+        sim_time = end - start
+        msg = "Análisis de reducción de alcance " +str(np.round(sim_time,2))+' s'
+        print(msg)
+        report_txt.append(msg)
+        
+    return RoRCurrents, report_txt
 
 #%% PROTECTION DEVICES VERIFICATION - Sympathetic tripping
 # Iverter contribution to fault current: 1.2 (120% according to SANDIA Protections report)
@@ -1991,12 +2278,13 @@ def ReductionReach(DSScircuit, DSStext, dss_network, firstLine,
 # Input: DSStext, DSScircuit, dss_network, firstLine, hora_sec, kW_sim, kVAr_sim, capacity_i, SympatheticTripping_analysis, faulttypes, Izero_trip, SympatheticTripping_df
 # Output: SympatheticTripping_df
 def SympatheticTripping(DSStext, DSScircuit, dss_network, firstLine,
-                        snapshotdate, snapshottime, kW_sim, kVAr_sim,
+                        snapshotdate, snapshottime, kW_sim, kVAr_sim, circuit_demand,
                         capacity_i, Trafos, DERs, SympatheticTripping_analysis,
-                        faulttypes, Izero_trip, SympatheticTripping_df):
+                        faulttypes, I_51_p_trip, I_51_g_trip, SympatheticTripping_df, report_txt):
     faulttypeterminals = {'ABC':['.1.2','.3.3', '2'], 'ABCG':['.1.2.3','.0.0.0','3'], 'AB':['.1','.2','1'], 'BC':['.2','.3','1'], 'AC':['.1','.3','1'], 'ABG':['.1.1','.2.0','2'], 'BCG':['.2.2','.3.0','2'], 'ACG':['.1.1','.3.0','2'], 'AG':['.1','.0','1'], 'BG':['.2','.0','1'], 'CG':['.3','.0','1']}
 
     if SympatheticTripping_analysis:
+        start = time.time()
         #%% Calculate the hour and date in the simulation
         h, m = snapshottime.split(':')
         if m != '00' or m != '15' or m != '30' or m != '45':  # round sim minutes
@@ -2018,13 +2306,25 @@ def SympatheticTripping(DSStext, DSScircuit, dss_network, firstLine,
         snapshottime = h + ':' + m
         day_ = snapshotdate.replace('/', '')
         day_ = day_.replace('-', '')
+        daily_strtime = str(day_ + snapshottime.replace(':', ''))         
         hora_sec = snapshottime.split(':')
+
+        # P and Q to match
+        V_to_be_matched = 0
+        for ij in range(len(circuit_demand)):
+            temp_a = circuit_demand[ij][0]  # day
+            temp_b = circuit_demand[ij][1]  # hour                    
+            if str(temp_a.replace('/', '') + temp_b.replace(':', '')) == daily_strtime:                        
+                V_to_be_matched = circuit_demand[ij][4]  # Voltage
+                break
         
         element = firstLine
-        ftlist = 'sourcebus.1.2.3'.split('.')
-        Izero_max=0
+        ftlist = 'symptrip.1.2.3'.split('.')
+        ip_max = 0
+        ig_max = 0
+        
         for faulttype in faulttypes:
-            print('FF: '+element+ ', Fault: '+faulttype)
+            print('ST: '+element+ ', Fault: '+faulttype)
             # Machines inicialization simulation
             DSStext.Command = 'clear'
             DSStext.Command = 'New Circuit.Circuito_Distribucion_Snapshot'
@@ -2033,12 +2333,16 @@ def SympatheticTripping(DSStext, DSScircuit, dss_network, firstLine,
             DSStext.Command = 'Set number=1'  # Number of steps to be simulated
             DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
             DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time
-            DSStext.Command = 'batchedit load.n_.* kW=' + str(kW_sim[0]) # kW corrector
-            DSStext.Command = 'batchedit load.n_.* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+            DSStext.Command = 'batchedit load..* kW=' + str(kW_sim[0]) # kW corrector
+            DSStext.Command = 'batchedit load..* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+            DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched) # Tensión en cabecera
+            # Integra los trafos y DERs generados por el código
             for tx in Trafos:
                 DSStext.Command = tx
             for der in DERs:
                 DSStext.Command = der
+            # Integra la línea extra (100m de la subestación/cabecera)
+            DSStext.Command = "new line.symptrip bus1=Sourcebus.1.2.3 bus2=symptrip.1.2.3 geometry=3FMV336AAAC1/0AAAC_H length=100 units=m "
                         
             DSScircuit.Solution.Solve()
 
@@ -2056,29 +2360,52 @@ def SympatheticTripping(DSStext, DSScircuit, dss_network, firstLine,
             DSScircuit.Solution.Solve()
             
             DSScircuit.SetActiveElement('line.'+firstLine)
-            print('seq: '+str(DSScircuit.ActiveCktElement.SeqCurrents))
             print('currents: '+str(DSScircuit.ActiveCktElement.CurrentsMagAng))
-            print('Powers: '+str(DSScircuit.ActiveCktElement.Powers))
-            if Izero_max < DSScircuit.ActiveCktElement.SeqCurrents[0]:
-                Izero_max = DSScircuit.ActiveCktElement.SeqCurrents[0]
-                faulttype_max = faulttype
-        HCSTOP = True if Izero_max >= Izero_trip else False
-        tmp = pd.DataFrame({'GDKWP':[capacity_i],'FAULT': [faulttype_max],
-                            'I0':[Izero_max], 'HCSTOP' : [HCSTOP]})
+            
+            i_pA = DSScircuit.ActiveCktElement.CurrentsMagAng[0] # Magnitud Neutro
+            print("IP_A = "+str(i_pA))
+            i_pB = DSScircuit.ActiveCktElement.CurrentsMagAng[2] # Magnitud Neutro
+            print("IP_B = "+str(i_pB))
+            i_pC = DSScircuit.ActiveCktElement.CurrentsMagAng[4] # Magnitud Neutro
+            print("IP_C = "+str(i_pC))
+            
+            for i_fase in [i_pA, i_pB, i_pC]:
+                print(i_fase, ip_max)
+                if i_fase > ip_max:
+                    ip_max = i_fase
+                    faulttype_max_ip = faulttype
+            
+            if "G" in faulttype: # Solo fallas a tierra
+                i_g = DSScircuit.ActiveCktElement.Residuals[0]# Magnitud residual
+                print("IG = "+str(i_g))
+            
+                if i_g > ig_max:
+                    ig_max = i_g
+                    faulttype_max_ig = faulttype
+                    
+        HCSTOP = True if ((ip_max >= I_51_p_trip) or (ig_max >= I_51_g_trip)) else False
+        
+        tmp = pd.DataFrame({'DER_kWp':[capacity_i],'FAULT_IP': [faulttype_max_ip],
+                            'IP':[i_fase], 'FAULT_IG': [faulttype_max_ig],
+                            'IG':[i_g], 'HCSTOP' : [HCSTOP]})
+        
         SympatheticTripping_df = pd.concat([SympatheticTripping_df, tmp],
                                            ignore_index=True)
-    
-    return SympatheticTripping_df
+        
+        end = time.time()
+        sim_time = end - start
+        msg = "Análisis de disparo indebido " +str(np.round(sim_time,2))+' s'
+        print(msg)
+        report_txt.append(msg)
+        
+    return SympatheticTripping_df, report_txt
 #%% INITIAL TX AND MV LOADS INFORMATION FOR FUTURE HISTOGRAM 
 #Input: DSScircuit, DSSobj, DSStext, G, tx_layer, mv_loads_layer
 #Output: LoadTrafos_MVLoads -> Dataframe 
 
-def base_info_tx_and_mvloads(DSScircuit, DSSobj, DSStext, G, tx_layer, mv_loads_layer):
+def base_info_tx_and_mvloads(DSScircuit, DSSobj, DSStext, G, tx_layer, der_ss_layer, mv_loads_layer):
     start = time.time()
     
-    rand_bus = tx_layer.loc[0,'bus1']
-    ckt_name = rand_bus.split(rand_bus[min([i for i, c in enumerate(rand_bus) if c.isdigit()])])[0].split('BUSMV')[1]
-    # first_bus = 'BUSMV' + ckt_name + '1'
     first_bus = 'AFTERMETER'
     
     LoadTrafos_MVLoads_1 = tx_layer[['DSSNAME', 'LV_GROUP', 'bus1', 'KVAPHASEA', 'KVAPHASEB', 'KVAPHASEC', 'kVA_snap']]
@@ -2095,20 +2422,15 @@ def base_info_tx_and_mvloads(DSScircuit, DSSobj, DSStext, G, tx_layer, mv_loads_
     else: 
         LoadTrafos_MVLoads = LoadTrafos_MVLoads_1.copy()
     
-    for idx, yield_ in LoadTrafos_MVLoads.iterrows():
-        node = yield_['bus1']
-        try:
-            dist = nx.shortest_path_length(G, first_bus, node,
-                                        weight='distance')/1000
-        except:
-            dist = 0
-            print("Error nodo ", node)
-        LoadTrafos_MVLoads.loc[idx, 'distance_m']= dist
-    # LoadTrafos_MVLoads['distance_m'] = LoadTrafos_MVLoads['bus1'].apply(lambda b: (nx.shortest_path_length(G, first_bus, b, weight='distance'))/1000)
-
+    LoadTrafos_MVLoads['distance_m'] = LoadTrafos_MVLoads['bus1'].apply(lambda b: (nx.shortest_path_length(G, first_bus, b, weight='distance'))/1000)
+    if not der_ss_layer.empty:
+        LoadTrafos_MVLoads["Av_Rating"] = LoadTrafos_MVLoads.apply(lambda row: row["Rating"] - der_ss_layer[der_ss_layer["LV_GROUP"] == str(row["LV_GROUP"])]["KVA"].sum(), axis=1)
+    else:
+        LoadTrafos_MVLoads["Av_Rating"] = LoadTrafos_MVLoads["Rating"]
+    
     end = time.time()
     sim_time = end - start
-    print('LoadMV: '+str(round(sim_time,2))+' sec.')
+    print('LoadMV: '+str(np.round(sim_time,2))+' sec.')
     
     return LoadTrafos_MVLoads
 
@@ -2192,26 +2514,22 @@ def base_info_lvloads(lv_loads_layer, LoadTrafos_MVLoads, DSScircuit):
     for group in list(set(LoadTrafos_MVLoads['LV_GROUP'])):
         
         group_loads = lv_loads_layer.loc[lv_loads_layer['LV_GROUP']==group] #filtered dataframe
-        if group_loads.empty is True and int(group) >= -1:
+        if group_loads.empty is True:
             #append trafo
             blacklist += list(LoadTrafos_MVLoads.loc[LoadTrafos_MVLoads['LV_GROUP']==group].index.values) # appended to blacklist and will not be part of dict
         
         else:
-            if int(group) <= -10:
-                pass
-
-            else:
-                Load_lvloads[int(group)] = group_loads[['bus1','DSSNAME', 'NOMVOLT', 'SERVICE', 'kVA_snap']]
-                
-                val_sum = Load_lvloads[int(group)]['kVA_snap'].sum()
-                Load_lvloads[int(group)] = Load_lvloads[int(group)].assign(kVA_norm = lambda x : x.kVA_snap/val_sum)
-                
-                Load_lvloads[int(group)] = Load_lvloads[int(group)].assign(DER_previo = lambda x : np.nan)
-                Load_lvloads[int(group)] = Load_lvloads[int(group)].assign(DER_actual = lambda x : np.nan)
+            Load_lvloads[int(group)] = group_loads[['bus1','DSSNAME', 'NOMVOLT', 'SERVICE', 'kVA_snap']]
             
+            val_sum = Load_lvloads[int(group)]['kVA_snap'].sum()
+            Load_lvloads[int(group)] = Load_lvloads[int(group)].assign(kVA_norm = lambda x : x.kVA_snap/val_sum)
+            
+            Load_lvloads[int(group)] = Load_lvloads[int(group)].assign(DER_previo = lambda x : np.nan)
+            Load_lvloads[int(group)] = Load_lvloads[int(group)].assign(DER_actual = lambda x : np.nan)
+        
     end = time.time()
     sim_time = end - start
-    print('LV dataframe time: '+str(round(sim_time,2))+' sec.')
+    print('LV dataframe time: '+str(np.round(sim_time,2))+' sec.')
     
     return Load_lvloads, blacklist
 
@@ -2266,10 +2584,10 @@ def step_calc(MV_hist_df, blacklist, blacklist_dict, max_kVA_step,
     
     if lim_kVA is True:
         #filtered data
-        lim_df = MV_hist_df.loc[MV_hist_df['DER_actual'] > MV_hist_df['Rating']]
+        lim_df = MV_hist_df.loc[MV_hist_df['DER_actual'] > MV_hist_df['Av_Rating']]
         temp_blacklist = list(lim_df.index.values)
         #Updates values
-        MV_hist_df.loc[temp_blacklist, 'DER_actual'] = MV_hist_df.loc[temp_blacklist, 'Rating'].copy()
+        MV_hist_df.loc[temp_blacklist, 'DER_actual'] = MV_hist_df.loc[temp_blacklist, 'Av_Rating'].copy()
         der_level_actual = int(MV_hist_df['DER_actual'].sum())
         der_step = int(MV_hist_df['DER_actual'].sum())- int(MV_hist_df['DER_previo'].sum())
         
@@ -2289,10 +2607,8 @@ def DER_calc(der_level_actual, der_step, LoadTrafos_MVLoads, blacklist,
     if der_level_actual == 0: #initial step
         # first, MV histogram 
         
-        MV_hist_df = LoadTrafos_MVLoads[['DSSNAME', 'bus1', 'LV_GROUP', 'Rating' ,'kVA_snap']]
-        # MV_hist_df = MV_hist_df.rename(columns={'base_snap': 'kVA_snap'})
+        MV_hist_df = LoadTrafos_MVLoads[['DSSNAME', 'bus1', 'LV_GROUP', 'Rating', 'Av_Rating' ,'kVA_snap']]
         MV_hist_df = MV_hist_df.assign(base_kVA_val = lambda x: x.kVA_snap)
-        # MV_hist_df['base_kVA_val'] = MV_hist_df.copy()['kVA_snap']
         
         MV_hist_df.loc[blacklist, 'kVA_snap'] = 0 # make the txs without loads get a value of 0 (excluded from analysis)
         val_sum = MV_hist_df['kVA_snap'].sum()
@@ -2302,7 +2618,7 @@ def DER_calc(der_level_actual, der_step, LoadTrafos_MVLoads, blacklist,
         MV_hist_df['DER_previo'] = 0
         MV_hist_df['DER_actual'] = 0
         # MV_hist_df['blacklist_info'] =''
-        MV_hist_df.loc[blacklist, 'blacklist_info'] = 'no load tx'
+        MV_hist_df.loc[blacklist, 'blacklist_info'] = 'Secundario sin cargas'
         
         # LV histogram 
         for group in LV_hist_df:
@@ -2341,7 +2657,7 @@ def DER_calc(der_level_actual, der_step, LoadTrafos_MVLoads, blacklist,
 # Input: LV_hist_df, MV_hist_df, mv_loads_layer
 # Output: DERs_LV, DERs_MV, Trafos_DERs_MV
 
-def DER_allocation_HHC(LV_hist_df, MV_hist_df, mv_loads_layer, trafo_df_f):
+def DER_allocation_HHC(LV_hist_df, MV_hist_df, mv_loads_layer, trafo_df_f, icc):
     
     DERs_LV = []
     DERs_MV = []
@@ -2349,17 +2665,8 @@ def DER_allocation_HHC(LV_hist_df, MV_hist_df, mv_loads_layer, trafo_df_f):
     
     for elem in MV_hist_df.loc[MV_hist_df['DER_actual'] > 0].index.values:
         group_id = MV_hist_df.loc[elem, 'LV_GROUP']
-        # Gen fict
-        if int(group_id) <= -10:
-            installed_capacity = str(MV_hist_df.loc[elem, 'DER_actual'])
-            trafo_df = trafo_df_f.loc[elem, :]
-            trafo_line = trafo_df['dss_line']
-            df_gen = trafo_df['df_gen']
-            der_line = add_generators(df_gen, installed_capacity)
-            DERs_MV.append(der_line)
-            Trafos_DERs_MV.append(trafo_line)
             
-        elif np.isnan(group_id) == False: #si es un trafo
+        if np.isnan(group_id) == False: #si es un trafo
             for idx_lv_load in LV_hist_df[int(group_id)].loc[LV_hist_df[int(group_id)]['DER_actual'] > 0].index: # recorre el df
                 service = ''
                 n_phases = ''
@@ -2389,8 +2696,8 @@ def DER_allocation_HHC(LV_hist_df, MV_hist_df, mv_loads_layer, trafo_df_f):
                 der_line += n_phases + ' bus1=' + busLV + bus_conn
                 der_line += ' kV=' + kV_LowLL + ' kW=' + str(float(installed_capacity))
                 der_line += ' PF=1 conn=wye kVA='
-                der_line+= str(round(float(installed_capacity)*1.2,2))
-                der_line += ' Model=7 Vmaxpu=1.5 Vminpu=0.80 Balanced=no Enabled=yes'                    
+                der_line+= str(np.round(float(installed_capacity)*1.2,2))
+                der_line += ' Model=7 Vmaxpu=1.5 Vminpu='+str(1/icc)+' Balanced=yes Enabled=yes'                    
         ###############################################
                 DERs_LV.append(der_line)
         
@@ -2494,8 +2801,8 @@ def DER_allocation_HHC(LV_hist_df, MV_hist_df, mv_loads_layer, trafo_df_f):
                 der_line += n_phases + ' bus1=' + busLV + '.1.2' + ' kV='
                 der_line += kV_LowLL + ' kW=' + str(float(installed_capacity))
                 der_line += ' PF=1 conn=wye kVA='
-                der_line += str(round(float(installed_capacity)*1.2,2))
-                der_line += ' Model=7 Vmaxpu=1.5 Vminpu=0.80 Balanced=no Enabled=yes'  
+                der_line += str(np.round(float(installed_capacity)*1.2,2))
+                der_line += ' Model=7 Vmaxpu=1.5 Vminpu='+str(1/icc)+' Balanced=yes Enabled=yes'  
 
 
             elif n_phases == '2' or n_phases == '3':
@@ -2525,8 +2832,8 @@ def DER_allocation_HHC(LV_hist_df, MV_hist_df, mv_loads_layer, trafo_df_f):
                 der_line += n_phases + ' bus1=' + busLV + bus_conn + ' kV='
                 der_line += kV_LowLL + ' kW=' + str(float(installed_capacity))
                 der_line += ' PF=1 conn=wye kVA='
-                der_line += str(round(float(installed_capacity)*1.2,2))
-                der_line += ' Model=7' + ' Vmaxpu=1.5 Vminpu=0.80 Balanced=no Enabled=yes'
+                der_line += str(np.round(float(installed_capacity)*1.2,2))
+                der_line += ' Model=7' + ' Vmaxpu=1.5 Vminpu='+str(1/icc)+' Balanced=yes Enabled=yes'
 
         ###############################################
             DERs_MV.append(der_line)
@@ -2546,24 +2853,24 @@ def flag_and_blacklist_calc(Overvoltage_loads_df, Voltagedeviation_loads_df,
                             FF_analysis, BFC_analysis, RoR_analysis, SympatheticTripping_analysis, MV_hist_df, 
                             capacity_i, flag, blacklist, blacklist_dict):
     
-    criteria_dict = {'Overvoltage_loads':{'Criteria': Overvoltage_analysis, 'data': Overvoltage_loads_df},
-                     'Overvoltage_rest':{'Criteria': Overvoltage_analysis, 'data': Overvoltage_rest_df},
-                     'VoltageDeviation_loads':{'Criteria': VoltageDeviation_analysis, 'data': Voltagedeviation_loads_df},
-                     'VoltageDeviation_rest':{'Criteria': VoltageDeviation_analysis, 'data': Voltagedeviation_rest_df},
-                     'VoltageRegulators':{'Criteria': VoltageRegulation_analysis, 'data': Voltagedeviation_reg_df},
-                     'VoltageUnbalance':{'Criteria': VoltageUnbalance, 'data': Voltageunbalance_df},
-                     'ThermalLoadingTx': {'Criteria': Thermal_analysis, 'data': Thermal_loading_tx_df},
-                     'ThermalLoadingLines': {'Criteria': Thermal_analysis, 'data': Thermal_loading_lines_df}, 
-                     'ProtectionFF': {'Criteria': FF_analysis, 'data': FFCurrents},
-                     'ProtectionBFC':{'Criteria': BFC_analysis, 'data': BFCCurrents},
-                     'ProtectionRoR':{'Criteria': RoR_analysis, 'data': RoRCurrents},
-                     'SympatheticTripping':{'Criteria': SympatheticTripping_analysis, 'data': SympatheticTripping_df}}
+    criteria_dict = {'Sobretensión en cargas':{'Criteria': Overvoltage_analysis, 'data': Overvoltage_loads_df},
+                     'Sobretensión en líneas':{'Criteria': Overvoltage_analysis, 'data': Overvoltage_rest_df},
+                     'Desviación de tensión en cargas':{'Criteria': VoltageDeviation_analysis, 'data': Voltagedeviation_loads_df},
+                     'Desviación de tensión en líneas':{'Criteria': VoltageDeviation_analysis, 'data': Voltagedeviation_rest_df},
+                     'Regulación de tensión':{'Criteria': VoltageRegulation_analysis, 'data': Voltagedeviation_reg_df},
+                     'Desbalance de tensión':{'Criteria': VoltageUnbalance, 'data': Voltageunbalance_df},
+                     'Cargabilidad en transformadores': {'Criteria': Thermal_analysis, 'data': Thermal_loading_tx_df},
+                     'Cargabilidad en líneas': {'Criteria': Thermal_analysis, 'data': Thermal_loading_lines_df}, 
+                     'Aumento de corriente de falla': {'Criteria': FF_analysis, 'data': FFCurrents},
+                     'Coordinación Recloser/Fusible':{'Criteria': BFC_analysis, 'data': BFCCurrents},
+                     'Reducción de alcance':{'Criteria': RoR_analysis, 'data': RoRCurrents},
+                     'Disparo indebido':{'Criteria': SympatheticTripping_analysis, 'data': SympatheticTripping_df}}
     
     hc_stop_list = []
     hc_blacklist_list = []
     flag_list = []
     for crit in criteria_dict:
-        if criteria_dict[crit]['Criteria'] is True:
+        if criteria_dict[crit]['Criteria'] == True:
             #HCSTOP INFO
             hc_stop_list.append(criteria_dict[crit]['data'])
             try:
@@ -2582,7 +2889,10 @@ def flag_and_blacklist_calc(Overvoltage_loads_df, Voltagedeviation_loads_df,
     
     hc_stop = pd.DataFrame(pd.concat(hc_stop_list, sort=True)['HCSTOP'])
     
-    hc_blacklist = pd.DataFrame(pd.concat(hc_blacklist_list, sort=True)['BLACKLIST_TX']).dropna()
+    try:
+        hc_blacklist = pd.DataFrame(pd.concat(hc_blacklist_list, sort=True)['BLACKLIST_TX']).dropna()
+    except:
+        hc_blacklist = pd.DataFrame([],columns=["BLACKLIST_TX"], index=[])
     
     updated_blacklist = [] #sum of tx who entered in the blacklist at the evaluated DER level
  
@@ -2598,8 +2908,7 @@ def flag_and_blacklist_calc(Overvoltage_loads_df, Voltagedeviation_loads_df,
     except:
         blacklist_dict[capacity_i] =  new_blacklist #the new topped tx at this DER level
     
-    blacklist += list(set(updated_blacklist + blacklist))
-    blacklist = list(set(blacklist)) # the accumulative blacklist 
+    blacklist += list(set(updated_blacklist + blacklist)); blacklist = list(set(blacklist)) # the accumulative blacklist 
     
     # Flag info
     if (hc_stop['HCSTOP'].any()):
@@ -2607,15 +2916,15 @@ def flag_and_blacklist_calc(Overvoltage_loads_df, Voltagedeviation_loads_df,
         
     elif (len(blacklist) == len(MV_hist_df.index)):
         flag = True
-        flag_list = ['Voltage or Thermal problems'] 
+        flag_list = ['Problemas térmicos o de tensión'] 
     
-    redo_sim = False # Variable whose function is to determine if it's necessary to repeat the simulation at the same DER level, but with updated blacklist.
+    redo_sim = False # Varible whose function is to determine if it's necessary to repeat the simulation at the same DER level, but with updated blacklist.
     if len(new_blacklist) > 0:
+        # print(new_blacklist)
         print('blacklisted txs: ' + str(len(blacklist)) + '/' +str(len(MV_hist_df.index)))
         redo_sim = True
     
     return flag, flag_list, blacklist, blacklist_dict, redo_sim
-        
         
 #%% Save and upload variables in pickle files
 # Input: path,name,variable
@@ -2655,4 +2964,500 @@ def save_criteria_data_iterative(data_dict, Overvoltage_loads_df, Voltagedeviati
     data_dict['SympatheticTripping'] = SympatheticTripping_df
 
     return data_dict
+    
+def GraphSnapshotVoltages(dataframe_voltages, fig_name):
+    try:
+        
+        nodes = list(dataframe_voltages.index)
+        
+        mv_nodes_A = []
+        mv_nodes_B = []
+        mv_nodes_C = []
+        
+        lv_nodes_A = []
+        lv_nodes_B = []
+        lv_nodes_C = []
+        
+        for node in nodes:
+            if "mv" in str(node).lower() or "source" in str(node).lower():
+                if str(node)[-1] == '1':
+                    mv_nodes_A.append(node)
+                elif str(node)[-1] == '2':
+                    mv_nodes_B.append(node)
+                elif str(node)[-1] == '3':
+                    mv_nodes_C.append(node)
+            
+            if "lv" in str(node).lower():
+                if str(node)[-1] == '1':
+                    lv_nodes_A.append(node)
+                elif str(node)[-1] == '2':
+                    lv_nodes_B.append(node)
+                elif str(node)[-1] == '3':
+                    lv_nodes_C.append(node)
+            
+        V_mv_A = pd.DataFrame(index = mv_nodes_A, columns = ['voltage', 'distance'])
+        V_mv_B = pd.DataFrame(index = mv_nodes_B, columns = ['voltage', 'distance'])
+        V_mv_C = pd.DataFrame(index = mv_nodes_C, columns = ['voltage', 'distance'])
+        
+        V_lv_A = pd.DataFrame(index = lv_nodes_A, columns = ['voltage', 'distance'])
+        V_lv_B = pd.DataFrame(index = lv_nodes_B, columns = ['voltage', 'distance'])
+        V_lv_C = pd.DataFrame(index = lv_nodes_C, columns = ['voltage', 'distance'])
+        
+        #Asignar valores
+        for node in list(dataframe_voltages.index):
+            #FASE A MEDIA TENSIÓN
+            if str(node)[-1] == '1' and node in mv_nodes_A:
+                V_mv_A.loc[node, 'voltage'] = dataframe_voltages.loc[node, 'VSnap_pu']
+                V_mv_A.loc[node, 'distance'] = dataframe_voltages.loc[node, 'Distancia']
+            #FASE A BAJA TENSIÓN
+            elif str(node)[-1] == '1' and node in lv_nodes_A:
+                V_lv_A.loc[node, 'voltage'] = dataframe_voltages.loc[node, 'VSnap_pu']
+                V_lv_A.loc[node, 'distance'] = dataframe_voltages.loc[node, 'Distancia']
+            #FASE B MEDIA TENSIÓN
+            elif str(node)[-1] == '2' and node in mv_nodes_B:
+                V_mv_B.loc[node, 'voltage'] = dataframe_voltages.loc[node, 'VSnap_pu']
+                V_mv_B.loc[node, 'distance'] = dataframe_voltages.loc[node, 'Distancia']
+            #FASE B BAJA TENSIÓN
+            elif str(node)[-1] == '2' and node in lv_nodes_B:
+                V_lv_B.loc[node, 'voltage'] = dataframe_voltages.loc[node, 'VSnap_pu']
+                V_lv_B.loc[node, 'distance'] = dataframe_voltages.loc[node, 'Distancia']
+            #FASE C MEDIA TENSIÓN
+            elif str(node)[-1] == '3' and node in mv_nodes_C:
+                V_mv_C.loc[node, 'voltage'] = dataframe_voltages.loc[node, 'VSnap_pu']
+                V_mv_C.loc[node, 'distance'] = dataframe_voltages.loc[node, 'Distancia']
+            #FASE C BAJA TENSIÓN
+            elif str(node)[-1] == '3' and node in lv_nodes_C:
+                V_lv_C.loc[node, 'voltage'] = dataframe_voltages.loc[node, 'VSnap_pu']
+                V_lv_C.loc[node, 'distance'] = dataframe_voltages.loc[node, 'Distancia']
+        
+        #PLOT 
+        
+        leyenda = []
+        fign = plt.figure(fig_name)
+        plt.title("Tensiones pu con respecto a la distancia de la subestación")
+        if V_mv_A.empty == False:	
+            plt.plot(V_mv_A['distance'], V_mv_A['voltage'], 'ro', markersize = 3.5)
+            leyenda.append("MV fase A")
+        if V_mv_B.empty == False:
+            plt.plot(V_mv_B['distance'], V_mv_B['voltage'], 'ko', markersize = 3.5)
+            leyenda.append("MV fase B")
+        if V_mv_C.empty == False:
+            plt.plot(V_mv_C['distance'], V_mv_C['voltage'], 'bo', markersize = 3.5)
+            leyenda.append("MV fase C")
+        if V_lv_A.empty == False:
+            plt.plot(V_lv_A['distance'], V_lv_A['voltage'], 'r.', markersize = 2.5)
+            leyenda.append("LV fase A (vivo 1)")
+        if V_lv_B.empty == False:
+            plt.plot(V_lv_B['distance'], V_lv_B['voltage'], 'k.', markersize = 2.5)
+            leyenda.append("LV fase B (vivo 2)")
+        if V_lv_C.empty == False:
+            plt.plot( V_lv_C['distance'], V_lv_C['voltage'], 'b.', markersize = 2.5)
+            leyenda.append("LV fase C")
+        
 
+        titulo_graph = "Tensión pu por bus"
+       
+        plt.legend(leyenda)
+        plt.ylabel("Tensión (pu)")
+        plt.xlabel("Distancia (km)")
+        
+        plt.title(titulo_graph)
+        mng = plt.get_current_fig_manager()
+        mng.window.showMaximized()
+        
+        
+        print("Graficación de tensiones exitosa")
+        return 1
+    except:
+        exc_info = sys.exc_info()
+        print("\nError: ", exc_info)
+        print("*************************  Información detallada del error ********************")
+            
+        for tb in traceback.format_tb(sys.exc_info()[2]):
+            print(tb)
+        return 0
+            
+## Función de estudio base 1: verificación de tensiones para evitar malas conexiones
+
+def base_study_1(DSStext, DSScircuit, dss_network, firstLine):
+    
+    DSStext.Command = 'clear'  # clean previous circuits
+    DSStext.Command = 'New Circuit.Circuito_Distribucion_Daily'
+    DSStext.Command = 'Compile ' + dss_network + '/Master.dss'  # Compile the OpenDSS Master file
+    DSStext.Command = 'Set mode=snapshot'  # Type of Simulation
+    DSStext.Command = 'Set time=(0,0)'  # Set the start simulation time                
+    DSStext.Command = 'New Monitor.HVMV_PQ_vs_Time line.' + firstLine + ' 1 Mode=1 ppolar=0'  # Monitor in the first line to monitor P and Q
+    DSStext.Command = 'batchedit load..* enabled = no' # No load simulation
+    DSStext.Command = 'batchedit storage..* enabled = no' # No Storage
+    DSStext.Command = 'batchedit PVSystem..* enabled = no' # No PVsystems
+    DSStext.Command = 'batchedit Generator..* enabled = no' # No generators
+    DSStext.Command = 'batchedit Capacitor..* enabled = no' # No capacitors
+    DSStext.Command = 'batchedit RegControl..* enabled = no' # No RegControls
+    DSStext.Command = 'batchedit CapControl..* enabled = no' # No CapControls
+    
+    for meter in DSScircuit.Meters.AllNames:
+        DSScircuit.Meters.Name = meter
+        if not "sub" in meter:
+            DSStext.Command = 'EnergyMeter.'+meter+'.enabled = no'
+    
+    DSScircuit.Solution.Solve()  # Solve the circuit
+
+    VBuses_b = pd.DataFrame(list(DSScircuit.AllBusVmag), index=list(DSScircuit.AllNodeNames), columns=['VOLTAGEV'])
+    VBuses_b=VBuses_b[~VBuses_b.index.str.contains('aftermeter')]; VBuses_b=VBuses_b[~VBuses_b.index.str.contains('_der')]; VBuses_b=VBuses_b[~VBuses_b.index.str.contains('_swt')]
+
+    base_vals = [120, 138, 208, 240, 254, 277, 416, 440, 480,
+                        2402, 4160, 7620, 7967, 13200, 13800, 14380,
+                        19920, 24900, 34500, 79670, 132790]
+
+    Base_V = pd.DataFrame()
+    Base_V['BASE'] = VBuses_b['VOLTAGEV'].apply(lambda v : base_vals[[abs(v-i) for i in base_vals].index(min([abs(v-i) for i in base_vals]))])
+    
+    Profile_Voltage = pd.DataFrame(np.nan, index=list(DSScircuit.AllNodeNames), columns=['Distancia', 'Base', 'VSnap_Mag', 'VSnap_pu'])
+    Profile_Voltage['Distancia'] = list(DSScircuit.AllNodeDistances)
+    Profile_Voltage['Base'] = Base_V['BASE']
+    Profile_Voltage['VSnap_Mag'] = list(DSScircuit.AllBusVmag)
+    Profile_Voltage['VSnap_pu'] = Profile_Voltage['VSnap_Mag']/Profile_Voltage['Base']
+    
+    GraphSnapshotVoltages(Profile_Voltage, "Estudio base 1: Verificación de conectividad de red")
+
+    return 0
+
+## Funciones de estudio base 2: verificación de snapshot sin DER existentes, pero modificando
+## la curva del alimentador
+
+def sum_curves(df_ss, df_ls, curve_dir):
+    curve_dir_ss = os.path.join(curve_dir, "DG")
+    curve_dir_ls = os.path.join(curve_dir, "LSDG")
+
+    # Create an empty list to store the sum of all curves
+    # Small scale DG:
+    sum_list_p_ss = [0] * 96
+    sum_list_q_ss = [0] * 96
+    
+    # Large scale DG:
+    sum_list_p_ls = [0] * 96
+    sum_list_q_ls = [0] * 96    
+
+    # Part 1: Small Scale:
+    
+    if not df_ss.empty: 
+        # Iterate over each row in the DataFrame
+        for _, row in df_ss.iterrows():
+            # Get the filename specified in the "CURVE1" column
+            curve_file_p = row["CURVE1"]
+            curve_file_q = row["CURVE2"]
+            
+            if curve_file_p == curve_file_q:
+                Flag_same_csv = True
+            else:
+                Flag_same_csv = False
+            
+            # Create the full path to the curve file
+            # P:
+            curve_path_p = os.path.join(curve_dir_ss, curve_file_p)
+            ext_p = os.path.splitext(curve_path_p)[1].lower()
+            # Q:
+            curve_path_q = os.path.join(curve_dir_ss, curve_file_q)
+            ext_q = os.path.splitext(curve_path_p)[1].lower()
+            
+            # Load the data from the curve file
+            if ((ext_p == ".csv") and (ext_q == ".csv") and (Flag_same_csv is True)):
+                curve_data_p = pd.read_csv(curve_path_p, usecols=[0], header=None).values.flatten()
+                curve_data_q = pd.read_csv(curve_path_q, usecols=[1], header=None).values.flatten()
+            
+            elif ((ext_p == ".csv") and (ext_q == ".csv") and (Flag_same_csv is False)):
+                curve_data_p = pd.read_csv(curve_path_p, usecols=[0], header=None).values.flatten()
+                curve_data_q = pd.read_csv(curve_path_q, usecols=[0], header=None).values.flatten()
+            
+            elif ((ext_p == ".csv") and (ext_q != ".csv") and (Flag_same_csv is False)):
+                curve_data_p = pd.read_csv(curve_path_p, usecols=[0], header=None).values.flatten()
+                curve_data_q = pd.read_csv(curve_path_q, header=None).values.flatten().tolist()
+            
+            elif ((ext_p != ".csv") and (ext_q == ".csv") and (Flag_same_csv is False)):
+                curve_data_p = pd.read_csv(curve_path_p, header=None).values.flatten().tolist()
+                curve_data_q = pd.read_csv(curve_path_q, usecols=[0], header=None).values.flatten()
+            
+            elif ((ext_p != ".csv") and (ext_q != ".csv") and (Flag_same_csv is False)):
+                curve_data_p = pd.read_csv(curve_path_p, header=None).values.flatten().tolist()
+                curve_data_q = pd.read_csv(curve_path_q, header=None).values.flatten().tolist()
+            
+            # Add the data to the sum_list
+            sum_list_p_ss = [sum(x) for x in zip(sum_list_p_ss, curve_data_p)]
+            sum_list_q_ss = [sum(x) for x in zip(sum_list_q_ss, curve_data_q)]
+    
+    # Part 2: Large Scale:
+    
+    if not df_ls.empty: 
+        # Iterate over each row in the DataFrame
+        for _, row in df_ls.iterrows():
+            # Get the filename specified in the "DAILY" column
+            curve_file = row["DAILY"]
+            curve_path = os.path.join(curve_dir_ls, curve_file)
+            
+            # Load the data from the curve file
+            curve_data_p_ls = pd.read_csv(curve_path, usecols=[0], header=None).values.flatten()
+            curve_data_q_ls = pd.read_csv(curve_path, usecols=[1], header=None).values.flatten()
+            
+            sum_list_p_ls = [sum(x) for x in zip(sum_list_p_ls, curve_data_p_ls)]
+            sum_list_q_ls = [sum(x) for x in zip(sum_list_q_ls, curve_data_q_ls)]
+    
+    # Part 3: Sum all:
+    
+    sum_list_p = [sum(x) for x in zip(sum_list_p_ss, sum_list_p_ls)]
+    sum_list_q = [sum(x) for x in zip(sum_list_q_ss, sum_list_q_ls)]
+    
+    return sum_list_p, sum_list_q
+
+def LoadAllocation_Run(DSSprogress, DSStext, DSScircuit, DSSobj, s_date, s_time, study, firstLine, circuit_demand, dss_network, tx_modelling, substation_type, line_tx_definition):
+    
+    t1= time.time()
+      # time: hh:mm
+    #%% Calculate the hour in the simulation
+    h, m = s_time.split(':')
+    if m != '00' or m != '15' or m != '30' or m != '45':  # round sim minutes
+        if int(m) <= 7:
+            m = '00'
+        elif int(m) <= 22:
+            m = '15'
+        elif int(m) <= 37:
+            m = '30'
+        elif int(m) <= 52:
+            m = '45'
+        else:
+            m = '00'
+            h = str(int(h) + 1)
+            if int(h) == 24:  # last round on 23:45
+                h = '23'
+                m = '45'
+
+    s_time = h + ':' + m
+    day_ = s_date.replace('/', '')
+    day_ = day_.replace('-', '')
+    daily_strtime = str(day_ + s_time.replace(':', ''))         
+    hora_sec = s_time.split(':')
+    
+    if study.lower() == 'snapshot': 
+    
+        # P and Q to match
+        P_to_be_matched = 0
+        Q_to_be_matched = 0
+        V_to_be_matched = 0
+        for ij in range(len(circuit_demand)):
+            temp_a = circuit_demand[ij][0]  # day
+            temp_b = circuit_demand[ij][1]  # hour                    
+            if str(temp_a.replace('/', '') + temp_b.replace(':', '')) == daily_strtime:                        
+                P_to_be_matched = circuit_demand[ij][2]  # Active power
+                Q_to_be_matched = circuit_demand[ij][3]  # Reactive power
+                V_to_be_matched = circuit_demand[ij][4]  # Reactive power
+                break
+                
+        # LoadAllocation Simulation
+        
+        DSStext.Command = 'clear'
+        DSStext.Command = 'New Circuit.Circuito_Distribucion_Snapshot'
+        DSStext.Command = 'Compile ' + dss_network + '/Master.dss'  # Compile the OpenDSS Master file
+        DSStext.Command = 'Set mode=daily'  # Type of Simulation
+        DSStext.Command = 'Set number=1'  # Number of steps to be simulated
+        DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
+        DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time                
+        DSStext.Command = 'New Monitor.HVMV_PQ_vs_Time line.' + firstLine + ' 1 Mode=1 ppolar=0'  # Monitor in the transformer secondary side to monitor P and Q
+        
+        # Modify the vpu from source according to circuit_demand voltage curve:
+        DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched)
+    
+        # Run the daily power flow for a particular moment
+        DSScircuit.Solution.Solve()  # Initialization solution                                            
+        
+        errorP = 0.003  # Maximum desired correction error for active power
+        errorQ = 0.01  # Maximum desired correction error for reactive power
+        max_it_correction = 100  # Maximum number of allowed iterations
+        # study = 'snapshot'  # Study type for PQ_corrector
+        gen_powers = np.zeros(1)
+        gen_rpowers = np.zeros(1)
+        # De acá en adelante hasta proximo # se comenta si no se quiere tomar encuenta la simulación de GD ya instalada
+        gen_p = 0
+        gen_q = 0
+        GenNames = DSScircuit.Generators.AllNames
+        
+        if GenNames[0] != 'NONE':
+            for i in GenNames: # extract power from generators
+                DSScircuit.setActiveElement('generator.' + i)
+                if DSScircuit.ActiveElement.Enabled is True: # Solo en generadores activos
+                    p = DSScircuit.ActiveElement.Powers
+                    for w in range(0, len(p), 2):
+                        gen_p += -p[w] # P
+                        gen_q += -p[w + 1] # Q
+                        
+            gen_powers[0] += gen_p
+            gen_rpowers[0] += gen_q
+        
+        print("Potencia activa generada por generadores: " +str(gen_powers[0]) +" kW")
+        print("Potencia reactiva generada por generadores: " +str(gen_rpowers[0]) +" kVAr")
+        DSSobj.AllowForms = 0
+        
+        [DSScircuit, errorP_i, errorQ_i, temp_powersP, temp_powersQ, kW_sim, kVAr_sim] = auxfcns.PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it_correction,
+                                      P_to_be_matched, Q_to_be_matched, V_to_be_matched, hora_sec, study,
+                                      dss_network, tx_modelling, 1, firstLine, substation_type,
+                                      line_tx_definition, gen_powers, gen_rpowers)
+                                      
+    
+        DSSobj.AllowForms = 1
+        t2= time.time()
+        print('Tiempo del load allocation: '+str(t2-t1))
+    
+    #%%
+    elif study== 'daily':   
+        # P and Q to match
+        P_to_be_matched = []
+        Q_to_be_matched = []
+        for ij in range(len(circuit_demand)):
+            temp_a = circuit_demand[ij][0]  # day             
+            if str(temp_a.replace('/', '')) == str(s_date.replace('/','')):                        
+                P_to_be_matched.append(circuit_demand[ij][2])  # Active power
+                Q_to_be_matched.append(circuit_demand[ij][3])  # Reactive power
+                V_to_be_matched.append(circuit_demand[ij][4])  # Voltage
+        
+        DSStext.Command = 'clear'  # clean previous circuits
+        DSStext.Command = 'New Circuit.Circuito_Distribucion_Daily'  # create a new circuit
+        DSStext.Command = 'Compile ' + dss_network + '/Master.dss'  # master file compilation
+        DSStext.Command = 'Set mode = daily'  # daily simulation mode
+        DSStext.Command = 'Set number= 1'  # steps by solve
+        DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s
+        DSStext.Command = 'Set time=(0,0)'  # Set the start simulation time
+        DSStext.Command = 'New Monitor.HVMV_PQ_vs_Time line.' + firstLine + ' 1 Mode=1 ppolar=0'  # Monitor in the first line to monitor P and Q
+        # generators powers
+        gen_powers = np.zeros(96)
+        gen_rpowers = np.zeros(96)
+        GenNames = DSScircuit.Generators.AllNames
+        
+        # solver for-loop
+        for t in range(96):
+            DSScircuit.Solution.Solve()
+        
+            if GenNames[0] != 'NONE':
+                gen_p = 0
+                gen_q = 0
+                for i in GenNames:  # extract power from existing generators
+                    DSScircuit.setActiveElement('generator.' + i)
+                    if DSScircuit.ActiveElement.Enabled is True: # Solo en generadores activos
+                        p = DSScircuit.ActiveElement.Powers
+                        for w in range(0, len(p), 2):
+                            gen_p += -p[w]
+                            gen_q += -p[w+1]
+                gen_powers[t] += gen_p
+                gen_rpowers[t] += gen_q
+
+        errorP = 0.003  # Maximum desired correction error for active power
+        errorQ = 0.01  # Maximum desired correction error for reactive power
+        max_it_correction = 100  # Maximum number of allowed iterations
+
+        # load allocation algorithm            
+        
+        [DSScircuit, errorP_i, errorQ_i, temp_powersP, temp_powersQ, kW_sim, kVAr_sim] = auxfcns.PQ_corrector(DSSprogress, DSScircuit, DSStext, errorP, errorQ, max_it_correction,
+                                      P_to_be_matched, Q_to_be_matched, hora_sec, study,
+                                      dss_network, tx_modelling, 1, firstLine, substation_type,
+                                      line_tx_definition, gen_powers, gen_rpowers)
+        
+        
+        auxfcns.PQ_corrector(DSScircuit, DSStext, errorP, errorQ, max_it_correction, P_to_be_matched, Q_to_be_matched, V_to_be_matched, hora_sec, study, dss_network, 1, firstLine, gen_powers, gen_rpowers)
+        
+        t2= time.time()
+        print('Tiempo del Load Allocation: '+str(t2-t1))
+    
+    return kW_sim, kVAr_sim
+    
+def base_study_2(DSSprogress, DSStext, DSScircuit, DSSobj, snapshotdate, snapshottime, dir_network, tx_modelling, firstLine, substation_type, line_tx_definition, der_ss, der_ls, circuit_demand):
+
+    # Paso 1: Se procede con el load allocation
+    study = "snapshot"
+    
+    #%% Calculate the hour in the simulation
+    h, m = snapshottime.split(':')
+    if m != '00' or m != '15' or m != '30' or m != '45':  # round sim minutes
+        if int(m) <= 7:
+            m = '00'
+        elif int(m) <= 22:
+            m = '15'
+        elif int(m) <= 37:
+            m = '30'
+        elif int(m) <= 52:
+            m = '45'
+        else:
+            m = '00'
+            h = str(int(h) + 1)
+            if int(h) == 24:  # last round on 23:45
+                h = '23'
+                m = '45'
+
+    snapshottime = h + ':' + m
+    day_ = snapshotdate.replace('/', '')
+    day_ = day_.replace('-', '')
+    daily_strtime = str(day_ + snapshottime.replace(':', ''))         
+    hora_sec = snapshottime.split(':')
+    
+    V_to_be_matched = 0
+    for ij in range(len(circuit_demand)):
+        temp_a = circuit_demand[ij][0]  # day
+        temp_b = circuit_demand[ij][1]  # hour                    
+        if str(temp_a.replace('/', '') + temp_b.replace(':', '')) == daily_strtime:                        
+            V_to_be_matched = circuit_demand[ij][4]  # Voltage
+            break
+    
+    kW_sim, kVAr_sim = LoadAllocation_Run(DSSprogress, DSStext, DSScircuit, DSSobj, snapshotdate, snapshottime, study, firstLine, circuit_demand, dir_network, tx_modelling, substation_type, line_tx_definition)
+    
+    # Paso 2: Verificación de tensiones base:
+    Base_V = getbases_simple(DSStext, DSScircuit, dir_network, firstLine)
+    
+    # Paso 3: Simulación
+    DSStext.Command = 'clear'
+    DSStext.Command = 'New Circuit.Circuito_Distribucion_Snapshot'
+    DSStext.Command = 'Compile ' + dir_network + '/Master.dss'  # Compile the OpenDSS Master file
+    DSStext.Command = 'Set mode=daily'  # Type of Simulation
+    DSStext.Command = 'Set number=1'  # Number of steps to be simulated
+    DSStext.Command = 'Set stepsize=15m'  # Stepsize of the simulation (se usa 1m = 60s)
+    DSStext.Command = 'Set time=(' + hora_sec[0] + ',' + hora_sec[1] + ')'  # Set the start simulation time
+    
+    for meter in DSScircuit.Meters.AllNames:
+        DSScircuit.Meters.Name = meter
+        if not "sub" in meter:
+            DSStext.Command = 'EnergyMeter.'+meter+'.enabled = no'
+    
+    DSStext.Command = 'batchedit load..* kW=' + str(kW_sim[0]) # kW corrector
+    DSStext.Command = 'batchedit load..* kVAr=' + str(kVAr_sim[0]) # kVAr corrector
+    
+    # Modify the vpu from source according to circuit_demand voltage curve:
+    DSStext.Command = "VSource.Source.pu =" +str(V_to_be_matched)
+        
+    DSScircuit.Solution.Solve()
+   
+    Profile_Voltage = pd.DataFrame(np.nan, index=list(DSScircuit.AllNodeNames), columns=['Distancia', 'Base', 'VSnap_Mag', 'VSnap_pu'])
+    Profile_Voltage['Distancia'] = list(DSScircuit.AllNodeDistances)
+    Profile_Voltage['Base'] = Base_V['BASE']
+    Profile_Voltage['VSnap_Mag'] = list(DSScircuit.AllBusVmag)
+    Profile_Voltage['VSnap_pu'] = Profile_Voltage['VSnap_Mag']/Profile_Voltage['Base']
+    
+    #Profile_Voltage.to_csv("hola.csv")
+    
+    GraphSnapshotVoltages(Profile_Voltage, "Estudio base 2: Resultado estudio Snapshot caso base con DER")
+    
+    return 0
+
+def update_final_dataframe(df, add_value, max_value):
+    if df.empty:
+        return df
+    
+    df_updated = df.copy()  # Create a copy of the original dataframe
+    
+    # Add the input value to the "DER_kWp" column
+    df_updated["DER_kWp"] += add_value
+    
+    # Filter out rows where "DER_kWp" value is greater than the input max_value
+    df_updated = df_updated[df_updated["DER_kWp"] <= max_value]
+    
+    return df_updated
+    
+        
+    
+    
+    
+    

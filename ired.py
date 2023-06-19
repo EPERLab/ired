@@ -38,6 +38,7 @@ import glob
 import pandas as pd
 import re
 import csv
+import traceback
 from qgis.core import QgsProject
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtCore import QUrl
@@ -47,15 +48,19 @@ import numpy as np
 import time
 import io
 import copy
+import matplotlib
 from qgis.core import QgsSymbol
 from qgis.core import QgsLineSymbol
 from qgis.core import QgsRendererRange
 from qgis.core import QgsGraduatedSymbolRenderer
+from qgis.core import QgsField, QgsFields, QgsFeature
+from PyQt5.QtCore import QVariant
 from PyQt5.QtGui import QColor
 from qgis.utils import iface
-
+from matplotlib import pyplot as plt
 from .Hybrid_Iterative_Functions import *
 from . import auxiliary_functions as auxfcns
+from typing import Optional
 
 pd.options.mode.chained_assignment = None
 
@@ -77,10 +82,15 @@ class ired:
         self.plugin_dir = os.path.dirname(__file__)
         # initialize locale
         locale = QSettings().value('locale/userLocale')[0:2]
+        if locale != (u'en'):
+            locale = (u'es')
+            
         locale_path = os.path.join(
             self.plugin_dir,
             'i18n',
-            'ired_{}.qm'.format(locale))
+            'en2.qm')
+            
+        print(locale_path)
 
         if os.path.exists(locale_path):
             self.translator = QTranslator()
@@ -124,48 +134,52 @@ class ired:
         # self.dlg.pushButton_transformer.clicked.connect(self.transformer_button)
 
         # Habilitación de checks de tipos de fallas ls
-        self.dlg.cf_ls.toggled.connect(self.enabler_fails_ls)
-        self.dlg.st_ls.toggled.connect(self.enabler_fails_ls)
-        self.dlg.coord_rf_ls.toggled.connect(self.enabler_fails_ls)
-        self.dlg.rr_ls.toggled.connect(self.enabler_fails_ls)
+        self.dlg.cf_ls.toggled.connect(self.enabler_faults_ls)
+        self.dlg.st_ls.toggled.connect(self.enabler_faults_ls)
+        self.dlg.coord_rf_ls.toggled.connect(self.enabler_faults_ls)
+        self.dlg.rr_ls.toggled.connect(self.enabler_faults_ls)
 
         # Habilitación de checks de tipos de fallas ss
-        self.dlg.cf_ss.toggled.connect(self.enabler_fails_ss)
-        self.dlg.st_ss.toggled.connect(self.enabler_fails_ss)
-        self.dlg.coord_rf_ss.toggled.connect(self.enabler_fails_ss)
-        self.dlg.rr_ss.toggled.connect(self.enabler_fails_ss)
+        self.dlg.cf_ss.toggled.connect(self.enabler_faults_ss)
+        self.dlg.st_ss.toggled.connect(self.enabler_faults_ss)
+        self.dlg.coord_rf_ss.toggled.connect(self.enabler_faults_ss)
+        self.dlg.rr_ss.toggled.connect(self.enabler_faults_ss)
+        
+        # Habilitación de checks para tipo de DER a simular
+        self.dlg.DER_PV.toggled.connect(self.select_type_DER)
+        self.dlg.DER_MS.toggled.connect(self.select_type_DER)
 
-        # Tab siempre iniciará en ls
+        # Tab siempre iniciará en estudios base
         self.dlg.tabWidget.setCurrentIndex(0)
 
     def show_help(self):
         """Display application help to the user."""
 
-        help_file = 'file:///%s/help/Manual_IRED.pdf' % self.plugin_dir
+        help_file = 'file:///%s/help/Manual-HerramientaIRED.pdf' % self.plugin_dir
         # For testing path:
         # QMessageBox.information(None, 'Help File', help_file)
         # noinspection PyCallByClass,PyTypeChecker
         QDesktopServices.openUrl(QUrl(help_file))
 
     # Función que habilita o deshabilita los tipos de falla en ls
-    def enabler_fails_ls(self):
+    def enabler_faults_ls(self):
         # Se habilitan las fallas en ls
         if (self.dlg.cf_ls.isChecked() or self.dlg.st_ls.isChecked()
                 or self.dlg.coord_rf_ls.isChecked()
                 or self.dlg.rr_ls.isChecked()):
-            self.dlg.Box_fails_ls.setEnabled(True)
+            self.dlg.Box_faults_ls.setEnabled(True)
         else:
-            self.dlg.Box_fails_ls.setEnabled(False)
+            self.dlg.Box_faults_ls.setEnabled(False)
 
     # Función que habilita o deshabilita los tipos de falla en ss
-    def enabler_fails_ss(self):
+    def enabler_faults_ss(self):
         # Se habilitan las fallas en ls
         if (self.dlg.cf_ss.isChecked() or self.dlg.st_ss.isChecked()
                 or self.dlg.coord_rf_ss.isChecked()
                 or self.dlg.rr_ss.isChecked()):
-            self.dlg.Box_fails_ss.setEnabled(True)
+            self.dlg.Box_faults_ss.setEnabled(True)
         else:
-            self.dlg.Box_fails_ss.setEnabled(False)
+            self.dlg.Box_faults_ss.setEnabled(False)
 
     # Funcion para habilitar o deshabilitar estudios de fallas
     def enabler_protection_analysis(self):
@@ -173,11 +187,11 @@ class ired:
             self.dlg.cf_ss.setEnabled(True)
             self.dlg.st_ss.setEnabled(True)
             self.dlg.rr_ss.setEnabled(True)
-            self.dlg.Box_fails_ss.setEnabled(True)
+            self.dlg.Box_faults_ss.setEnabled(True)
             self.dlg.cf_ls.setEnabled(True)
             self.dlg.st_ls.setEnabled(True)
             self.dlg.rr_ls.setEnabled(True)
-            self.dlg.Box_fails_ls.setEnabled(True)
+            self.dlg.Box_faults_ls.setEnabled(True)
         else:
             self.dlg.cf_ss.setEnabled(False)
             self.dlg.cf_ss.setChecked(False)
@@ -185,28 +199,27 @@ class ired:
             self.dlg.st_ss.setChecked(False)
             self.dlg.rr_ss.setEnabled(False)
             self.dlg.rr_ss.setChecked(False)
-            self.dlg.Box_fails_ss.setEnabled(False)
+            self.dlg.Box_faults_ss.setEnabled(False)
             self.dlg.cf_ls.setEnabled(False)
             self.dlg.cf_ls.setChecked(False)
             self.dlg.st_ls.setEnabled(False)
             self.dlg.st_ls.setChecked(False)
             self.dlg.rr_ls.setEnabled(False)
             self.dlg.rr_ls.setChecked(False)
-            self.dlg.Box_fails_ls.setEnabled(False)
+            self.dlg.Box_faults_ls.setEnabled(False)
 
         # La coordinacion recloser fusible sólo
         # se habilita si hay reclosers y fusibles
         if self.rec_fus is True:
             self.dlg.coord_rf_ss.setEnabled(True)
-            self.dlg.coord_rf_ss.setChecked(True)
             self.dlg.coord_rf_ls.setEnabled(True)
-            self.dlg.coord_rf_ls.setChecked(True)
         else:
             self.dlg.coord_rf_ss.setEnabled(False)
             self.dlg.coord_rf_ss.setChecked(False)
             self.dlg.coord_rf_ls.setEnabled(False)
             self.dlg.coord_rf_ls.setChecked(False)
 
+                    
     # Muestra la ventana del transformador principal
     def transformer_button(self):
         self.transformer.show()
@@ -218,7 +231,7 @@ class ired:
             prjpath = QgsProject.instance().fileName()
             if not prjpath:
                 msg = "El projecto en QGIS debe estar abierto para "
-                msg += "poder analizar la red de distribución"
+                msg += "poder analizar el circuito de distribución"
                 title = "Error al leer proyecto GIS"
                 QMessageBox.information(None, title, msg)
                 return 0, 0, 0
@@ -245,7 +258,7 @@ class ired:
         output_folder = QFileDialog.getExistingDirectory(self.dlg, msg_tr, "",)
         self.dlg.lineEdit_dirOutput.setText(output_folder)
 
-    # Method to select the load curve of the circuit
+    # Method to select the demand curve of the circuit
     def select_demand_curve(self):
         msg = "Seleccione el archivo .CSV para asignar curva de "
         msg += "demanda de circuito"
@@ -255,6 +268,19 @@ class ired:
         load_curve_circuit = load_curve_circuit[0]
         print("load_curve_circuit = ", str(load_curve_circuit))
         self.dlg.lineEdit_load_curve.setText(load_curve_circuit)
+    
+    # Función para solo activar la opción de aporte de corto o impedancia de máquina
+    # de acuerdo a lo seleccionado en el estudio de gran escala
+    
+    def select_type_DER(self):
+    
+        if self.dlg.DER_PV.isChecked():
+            self.dlg.ap_cc_ls.setEnabled(True)
+            self.dlg.ap_ms.setEnabled(False)
+        else:
+            self.dlg.ap_cc_ls.setEnabled(False)
+            self.dlg.ap_ms.setEnabled(True)
+        
 
     """
     *******************************************************************
@@ -761,7 +787,7 @@ class ired:
     *0 en caso de ocurrir algún error
     """
 
-    def install_geopandas(self):
+    def install_librerias_extra(self):
         try:
             # Se obtiene el path de QGIS
             directorio = str(os.path)
@@ -813,7 +839,7 @@ class ired:
             sentencia = dir_origen + "python.exe -m pipwin install numpy"
             subprocess.call(sentencia, cwd=dir_destino, shell=True)
 
-            sentencia = dir_origen + "python.exe -m pipwin install pandas"
+            sentencia = dir_origen + "python.exe -m pipwin install pandas==1.3.5"
             subprocess.call(sentencia, cwd=dir_destino, shell=True)
 
             sentencia = dir_origen + "python.exe -m pipwin install shapely"
@@ -834,16 +860,21 @@ class ired:
             sentencia = dir_origen + "python.exe -m pipwin install rtree"
             subprocess.call(sentencia, cwd=dir_destino, shell=True)
 
-            sentencia = dir_origen + "python.exe -m pipwin install geopandas"
+            # sentencia = dir_origen + "python.exe -m pipwin install geopandas"
+            # x = subprocess.call(sentencia, cwd=dir_destino, shell=True)
+            
+            sentencia = dir_origen + "python.exe -m pipwin install openpyxl"
             x = subprocess.call(sentencia, cwd=dir_destino, shell=True)
+            
             print(" x = ", x)
 
-            print("Instalación de librería geopandas finalizada.")
+            print("Instalación de librerías finalizada.")
             return 1
 
         except Exception:
             self.print_error()
             return 0
+
 
     """
     Function AttributeTable_ToDataframe
@@ -860,18 +891,24 @@ class ired:
         try:
             layer_name = layer_name.split("/")[-1]
             layer = QgsProject.instance().mapLayersByName(layer_name)[0]
-            # Recibe las caracteristicas de la capa
-            lineas = layer.getFeatures()
+            features = layer.getFeatures()
             col_names = layer.dataProvider().fields().names()
-            df_att_table = pd.DataFrame(columns=col_names)
-            for linea in lineas:
-                attributes = linea.attributes()
-                df2 = pd.DataFrame([attributes], columns=col_names)
-                df2.replace(['NULL', NULL], None, inplace=True)
-                df_att_table = df_att_table.append(df2,
-                                                 ignore_index=True)
+
+            # Use list comprehension to create a list of feature attributes
+            attributes_list = [feature.attributes() for feature in features]
+
+            # Create a DataFrame using the list of attributes
+            df_att_table = pd.DataFrame(attributes_list, columns=col_names)
+
+            # Replace 'NULL' and NULL values with None
+            df_att_table.replace(['NULL', None], np.nan, inplace=True)
+
+            # Replace empty strings with NaN
             df_att_table.replace(r'^\s*$', np.nan, regex=True, inplace=True)
+
+            # Reset index
             df_att_table.reset_index(inplace=True)
+
             return df_att_table, layer
         except Exception:
             self.print_error()
@@ -890,35 +927,53 @@ class ired:
     Outputs:
     *1 si finaliza exitosamente, 0 caso contrario
     """
-    
+
     def save_dataframe(self, df, layer, col_new=""):
         try:
-            lineas = layer.getFeatures()
-            if col_new == "":
-                col_layer = layer.dataProvider().fields().names()
-                col_dataframe = list(df.columns) 
-                col_new = list(set(col_dataframe) - set(col_layer))
-            # print("col_dataframe = ", col_dataframe, " col_layer = ", col_layer, " col_new = ", col_new)
+            features = layer.getFeatures()
+
+            if not col_new:
+                layer_columns = layer.dataProvider().fields().names()
+                dataframe_columns = list(df.columns)
+                col_new = list(set(dataframe_columns) - set(layer_columns))
 
             layer.startEditing()
-            # Se crean los nuevos atributos en el layer
-            
-            index_att  = auxfcns.getAttributeIndex(self, layer, col_new)
-            try:
-                df.reset_index(inplace=True)
-            except ValueError:
-                df.reset_index(inplace=True, drop=True)
-            # index_att = layer.fields().indexFromName(col_new)
+
+            # Check if the column already exists
+            attribute_index = layer.fields().indexFromName(col_new)
+
+            # If it doesn't exist, create it
+            if attribute_index == -1:
+                new_field = QgsField(col_new, QVariant.Double)
+                layer.dataProvider().addAttributes([new_field])
+                layer.updateFields()
+                attribute_index = layer.fields().indexFromName(col_new)
+
+            df.reset_index(inplace=True, drop=True)
+
+            # Collecting indices of the layer
+            layer_indices = [feature.id() for feature in features]
+               
+            for index in layer_indices:
+                # Set the column's value to None for each feature
+                layer.changeAttributeValue(index, attribute_index, None)
+
             for index, row in df.iterrows():
-                dato = str(row[col_new])
-                # print("dato = ", dato, " index_att = ", index_att, " columna = ", columna)
-                layer.changeAttributeValue(index, index_att, dato)
+                # Only updating values for indices present in the layer
+                if index in layer_indices:
+                    value = float(row[col_new])
+                    layer.changeAttributeValue(index, attribute_index, value)
+                    
+
             layer.commitChanges()
             return 1
+
         except Exception:
             self.print_error()
             return 0
-    
+
+
+
     # Master.dss file creation
     def create_master(self, dir_network, name_file_created,
                       tx_active, volt_nom):
@@ -1003,89 +1058,82 @@ class ired:
     *1 si finaliza exitosamente, 0 si hay errores
 
     """
-
-    def categ_layer(self, df, layer, column_name):
+   
+    
+    def assign_color(self, index):
+        color_map = matplotlib.colors.LinearSegmentedColormap.from_list("", ["red","yellow","green"])
+        rgb = color_map(index / 5)[:3]  # Normalize index with the number of color steps (5 here). 
+        return matplotlib.colors.rgb2hex(rgb)
+   
+    def categ_layer(self, df, layer, column_name, ranges=None):
         try:
             idx_col = layer.fields().indexFromName(column_name)
             if idx_col == -1:
-                msg = "No se encontró la columna " + column_name 
-                msg += " por lo que no se realizara la categorización"
-                print(msg)
+                print(f"No se encontró la columna {column_name} por lo que no se realizará la categorización")
                 return 0
+
             max_ = df.loc[df[column_name].idxmax(), column_name]
             min_ = df.loc[df[column_name].idxmin(), column_name]
-            max_ = float(max_)
-            min_ = float(min_)
-            datosLayer = layer.getFeatures()
-            div = 6
-            step = (max_- min_)/div
-            
-            name_cat = []
-            rang_ = []
-            if max_ == min_:
-                msg = "El máximo y minínimo es el mismo, no se puede "
-                msg += "categorizar"
-                print(msg)
-                return 0
+            max_, min_ = float(max_), float(min_)
+
+            symbol = QgsLineSymbol.defaultSymbol(layer.geometryType())
+            symbol.setWidth(1.6)
+
             if min_ < 0:
-                msg = "No deben existir valores negativos"
-                print(msg)
+                print("No deben existir valores negativos")
                 return 0
-            
-            last = min_
-            while last < max_:
-                sup = last + step
-                name = str(round(last, 2)) + "-" + str(round(sup, 2))
-                name_cat.append(name)
-                rang_.append(last)
-                last = sup
-            
-            # Último valor
-            rang_.append(round(max_, 2))
-            values = (
-                        (name_cat[0], rang_[0], rang_[1] - 0.001, '#2e7f18', 1.6),
-                        (name_cat[1], rang_[1], rang_[2] - 0.001, '#45731e', 1.6),
-                        (name_cat[2], rang_[2], rang_[3] - 0.001, '#675e24', 1.6),
-                        (name_cat[3], rang_[3], rang_[4] - 0.001, '#8d472b', 1.6),
-                        (name_cat[4], rang_[4], rang_[5] - 0.001, '#b13433', 1.6),
-                        (name_cat[5], rang_[5], rang_[6], '#c82538', 1.6),
-                    )
-            
-            ranges = []
-            
-            for label, lower, upper, color, width in values:
-                symbol = QgsSymbol.defaultSymbol(layer.geometryType())
-                symbol.setColor(QColor(color))
-                symbol = QgsLineSymbol.defaultSymbol(layer.geometryType())
-                try:
-                 symbol.setWidth(width)
-                except:
-                 aviso = "Se debe seleccionar una capa que sea del tipo línea"
-                 QMessageBox.warning(None, "Error graduado de líneas", aviso)
-                 return 0
-                rng = QgsRendererRange(lower, upper, symbol, label)
-                ranges.append(rng)
-            
-            GraduatedSize = QgsGraduatedSymbolRenderer.setGraduatedMethod
-            renderer = QgsGraduatedSymbolRenderer(column_name, ranges)
-            layer.setRenderer(renderer)    
-            iface.mapCanvas().refresh() # se ejecuta un refrescado de las propiedades de la capa
-            layer.triggerRepaint() #Activa los cambios inmediatamente al finalizar el plugin
-            return 1
-        # Caso en que sólo haya nan en el dataframe
+
+            if max_ == min_:
+                print("El máximo y mínimo es el mismo, se pintará todo de un color")
+                symbol.setColor(QColor(self.assign_color(5)))  # using the last color of the gradient
+                symbol.setWidth(1.6)
+                rng = QgsRendererRange(min_, max_, symbol, f"{round(min_, 2)}-{round(max_, 2)}")
+                renderer = QgsGraduatedSymbolRenderer(column_name, [rng])
+
+            else:
+                div = 6
+                step = (max_ - min_) / div
+
+                name_cat = []
+                rang_ = [min_]
+                last = min_
+                while last < max_:
+                    last += step
+                    name_cat.append(f"{round(last - step, 2)}-{round(last, 2)}")
+                    rang_.append(last)
+
+                epsilon = 1
+                values = [(rng.label(), rng.lowerValue(), rng.upperValue() + epsilon if i == div - 1 else rng.upperValue(), self.assign_color(i), 1.6) for i, rng in enumerate(ranges)] if ranges else [(name, lower, upper + epsilon if i == div - 1 else upper, self.assign_color(i), 1.6) for i, (name, lower, upper) in enumerate(zip(name_cat, rang_, rang_[1:]))]
+
+                ranges = []
+                for label, lower, upper, color, _ in values:
+                    symbol = QgsLineSymbol.defaultSymbol(layer.geometryType())
+                    symbol.setColor(QColor(color))
+                    symbol.setWidth(1.6)
+                    rng = QgsRendererRange(lower, upper, symbol, label)
+                    ranges.append(rng)
+
+                renderer = QgsGraduatedSymbolRenderer(column_name, ranges)
+
+            layer.setRenderer(renderer)
+            iface.mapCanvas().refresh()
+            layer.triggerRepaint()
+            return ranges
+
         except KeyError:
             return 1
-        except Exception:
-            self.print_error()
+        except Exception as e:
+            print(f"Error: {e}")
             return 0
-    
+
     # ##################################################################
     def run(self):
         try:
             self.protections = False
             self.rec_fus = False
             
-            self.install_libraries("networkx --upgrade")
+            self.install_libraries("networkx==3.1")
+            self.install_libraries("pandas==1.3.5")
             try:
                 import comtypes.client as cc
             except:
@@ -1097,16 +1145,23 @@ class ired:
             except Exception:
                 self.install_libraries("Unidecode")
                 from unidecode import unidecode
-            
             try:
-                import geopandas as gp
-                from fiona.errors import DriverError
+                from openpyxl import openpyxl
             except Exception:
-                self.install_libraries("geopandas")
-                self.install_geopandas()
-                import geopandas as gp
-                from fiona.errors import DriverError
-                print("Geopandas instalado")
+                self.install_libraries("openpyxl")
+                import openpyxl
+            
+            # try:
+                # import numpy as np
+                # import gdal
+                # import fiona
+                # import pyproj
+                # import six
+                # import rtre
+            
+            # except Exception:
+                # self.install_librerias_extra()
+
             """Run method that performs all the real work"""
             # Se busca información general sobre estructura de las carpetas
             prjpath, dir_general, dir_network = self.circuit_calling()
@@ -1183,6 +1238,8 @@ class ired:
                                     'Fuses': "!Layer Fuses: ",
                                     'Seccionadores': "!Layer Switches: ",
                                     'Capacitors': "!Layer Capacitors: ",
+                                    'DERss': "!Layers DERss: ",
+                                    'DERls': "!Layers DERls: "
                                     }
 
             # Nombre de capa de subestación
@@ -1221,6 +1278,10 @@ class ired:
             exp_search = searched_expressions['Regs']
             layer_reg = self.findLayers(lines, exp_search, gis_network)
             
+            #Capacitores
+            exp_search = searched_expressions['Capacitors']
+            layer_cap = self.findLayers(lines, exp_search, gis_network)
+            
             # Loads info
             # BT
             exp_search = searched_expressions['CargasBT']
@@ -1239,12 +1300,22 @@ class ired:
             exp_search = searched_expressions['Reclosers']
             layer_rec = self.findLayers(lines, exp_search, gis_network)
             
+            # DERs Existentes
+            # DER pequeña escala
+            exp_search = searched_expressions['DERss']
+            layer_der_ss = self.findLayers(lines, exp_search, gis_network)
+            
+            # DER gran escala
+            exp_search = searched_expressions['DERls']
+            layer_der_ls = self.findLayers(lines, exp_search, gis_network)
+            
             # Banderas para habilitar los estudios de protecciones
-            if layer_rec != [] or layer_rec != 0 or layer_fuses != [] or layer_fuses != 0:
+            if ((layer_rec != []) or (layer_rec != 0) or (layer_fuses != []) or (layer_fuses != 0)):
                 self.protections = True
-            if layer_rec != [] and layer_rec != 0 and layer_fuses != [] and layer_fuses != 0:
+            if ((layer_rec != []) and (layer_rec != 0) and (layer_fuses != []) and (layer_fuses != 0)):
                 self.rec_fus = True
             self.enabler_protection_analysis()
+            
 
             # ######################################################################
             # ######################################################################
@@ -1259,10 +1330,13 @@ class ired:
             result = self.dlg.exec_()
             # See if OK was pressed
             if result:
+                start_lectura_capas = time.time()
+                
                 self.output = self.dlg.lineEdit_dirOutput.text()
+                
                 # Nombre de capa de subestación
                 if layer_sub == [] or layer_sub == 0:
-                    msg = "Debe existir la capa de subestación "
+                    msg = "Debe existir la capa de subestación/cabecera del alimentador "
                     msg += "para poder ejecutar el programa correctamente"
                     title = "Error al encontrar capa"
                     QMessageBox.information(None, title, msg)
@@ -1276,16 +1350,46 @@ class ired:
                         msg += "subestación debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
+                        return None
+                    try:
+                        assert ("XHL" not in subs.columns)
+                    except AssertionError:
+                        msg = "La capa de cabecera que está utilizando corresponde a una capa de subestación. \n"
+                        msg += "Favor volver a correr el plugin QGIS2OPENDSS sin modelar la subestación"
+                        title = "Error de atributos en la cabecera"
+                        QMessageBox.information(None, title, msg)
+                        return None
+                    try:
+                        assert (("ISC_3P" in subs.columns) and ("ISC_1P" in subs.columns))
+                    except AssertionError:
+                        msg = "La capa de cabecera que está utilizando no posee los atributos de medición de cortocircuito. \n"
+                        msg += "Favor corregir"
+                        title = "Error de atributos en la cabecera"
+                        QMessageBox.information(None, title, msg)
+                        return None
+                    try:
+                        assert ((subs.loc[0,"ISC_3P"] not in ["", " ", None, "NULL"]) and (subs.loc[0,"ISC_1P"] not in ["", " ", None, "NULL"]))
+                    except AssertionError:
+                        msg = "La capa de cabecera que está utilizando no posee valores válidos en los atributos de medición de cortocircuito. \n"
+                        msg += "Favor corregir"
+                        title = "Error de atributos en la cabecera"
+                        QMessageBox.information(None, title, msg)
+                        return None
 
                 # Capas de buses MV (estas siempre tendrán el mismo nombre)
                 try:
                     nodes_mv, layer_mt_buses = self.AttributeTable_ToDataframe("/Bus_MT_Layer")
+                    rand_bus = nodes_mv.loc[0,'BUS']
+                    ckt_name = rand_bus.split(rand_bus[min([i for i, c in enumerate(rand_bus) if c.isdigit()])])[0].split('BUSMV')[1]
+                    # Cambio de nombre al primer nodo:
+                    nodes_mv.loc[nodes_mv['BUS'].isin(['BUSMV'+ckt_name+'1', 'Sourcebus']), 'BUS'] = 'AFTERMETER'
                     # nodes_mv = gp.read_file(gis_network + '/Bus_MT_Layer.shp')
                 except DriverError:
                     msg = "Verifique que existan las capas de nodos de "
                     msg += "media tensión"
                     title = "Error al encontrar capa"
                     QMessageBox.information(None, title, msg)
+                    return None
 
                 # Capas de buses LV (estas siempre tendrán el mismo nombre)
                 try:
@@ -1325,6 +1429,7 @@ class ired:
                         # lines_mv_oh_layer_original = gp.read_file(layer_mt_aer[0] + ".dbf")
                         lines_mv_oh_layer = lines_mv_oh_layer_original.copy()
                         lines_mv_oh_layer['bus2'] = lines_mv_oh_layer['bus2'].str.replace('_swt', '')
+                        lines_mv_oh_layer['bus1'] = lines_mv_oh_layer['bus1'].str.replace('_reg', '')
                     except DriverError:
                         lines_mv_oh_layer_original = pd.DataFrame()
                         lines_mv_oh_layer = lines_mv_oh_layer_original.copy()
@@ -1332,6 +1437,7 @@ class ired:
                         msg += "líneas MT aéreas  debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
+                        return None
                 # Líneas MT sub
                 if layer_mt_sub == [] or layer_mt_sub == 0:
                     lines_mv_ug_layer_original = pd.DataFrame()
@@ -1361,6 +1467,7 @@ class ired:
                         msg += "líneas MT subterráneas debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
+                        return None
 
                 if lines_mv_oh_layer_original.empty and lines_mv_ug_layer_original.empty:
                     msg = "Debe existir la capa de líneas de media tensión "
@@ -1405,6 +1512,7 @@ class ired:
                 else:
                     try:
                         lines_lv_oh_layer, layer_lv_oh = self.AttributeTable_ToDataframe(layer_l_oh_lv[0])
+                        lines_lv_oh_layer['LV_GROUP'] = lines_lv_oh_layer['LV_GROUP'].astype(float)
                         # lines_lv_oh_layer = gp.read_file(layer[0] + ".shp")
                     except DriverError:
                         lines_lv_oh_layer = pd.DataFrame()
@@ -1412,6 +1520,7 @@ class ired:
                         msg += "líneas BT aéreas debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
+                        return None
 
                 vect_lv.append(lines_lv_oh_layer)
                 # Subterráneas
@@ -1420,6 +1529,7 @@ class ired:
                 else:
                     try:
                         lines_lv_ug_layer, layer_lv_ug = self.AttributeTable_ToDataframe(layer_l_ug_lv[0])
+                        lines_lv_ug_layer['LV_GROUP'] = lines_lv_ug_layer['LV_GROUP'].astype(float)
                         # lines_lv_ug_layer = gp.read_file(layer[0] + ".shp")
                     except DriverError:
                         lines_lv_ug_layer = pd.DataFrame()
@@ -1427,6 +1537,7 @@ class ired:
                         msg += "líneas BT aéreas debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
+                        return None
 
                 vect_lv.append(lines_lv_ug_layer)
                 if lines_lv_oh_layer.empty and lines_lv_ug_layer.empty:
@@ -1435,6 +1546,7 @@ class ired:
                     title = "Error al encontrar capa"
                     # QMessageBox.information(None, title, msg)
                     # return
+                
                 # Acometidas
                 if layer_acom == [] or layer_acom == 0:
                     acom = pd.DataFrame()
@@ -1442,6 +1554,7 @@ class ired:
                     try:
                         for name_shape in layer_acom:
                             acom, layer_ac = self.AttributeTable_ToDataframe(name_shape)
+                            acom['LV_GROUP'] = acom['LV_GROUP'].astype(float)
                             # acom = gp.read_file(name_shape + ".shp")
                             vect_lv.append(acom)
                     except DriverError:
@@ -1449,6 +1562,7 @@ class ired:
                         msg += "acometidas debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
+                        return None
 
                 # union capas de líneas
                 lines_lv = pd.concat(vect_lv, sort=True)
@@ -1466,7 +1580,7 @@ class ired:
                 else:
                     line_lv_groups = pd.DataFrame()
 
-                # TX info
+                # TX layers
                 if layer_tx == [] or layer_tx == 0:
                     msg = "Debe existir la capa de transformadores "
                     msg += "para poder ejecutar el programa correctamente"
@@ -1481,11 +1595,13 @@ class ired:
                         vect_traf.append(tx_layer)
                     tx_layer = pd.concat(vect_traf, sort=True)
                     tx_layer = tx_layer.drop(tx_layer.loc[tx_layer['DSSNAME'].isnull()].index.values)
+                    tx_layer['LV_GROUP'] = tx_layer['LV_GROUP'].astype(float)
                 except DriverError:
                     msg = "El nombre del archivo shp de la capa de "
                     msg += "transformadores debe ser igual al nombre de la capa"
                     title = "Error al encontrar capa"
                     QMessageBox.information(None, title, msg)
+                    return None
 
                 try:
                     tx_groups = pd.DataFrame(list(tx_layer['LV_GROUP']),
@@ -1496,6 +1612,43 @@ class ired:
                     tx_groups = pd.DataFrame(list(tx_layer['LV_GROUP']),
                                              index=tx_layer['DSSNAME'],
                                              columns=['LV_GROUP'])
+                
+                # REGULADORES DE TENSIÓN
+                if layer_reg == [] or layer_reg == 0:
+                    cols_reg = ['BUSINST', 'VREG', 'BANDWIDTH']
+                    regs = pd.DataFrame(np.nan, columns=cols_reg, index=[])
+                else:
+                    try:
+                        regs, layer_regs = self.AttributeTable_ToDataframe(layer_reg[0])
+                        cols_reg = ['BUSINST', 'VREG', 'BANDWIDTH']
+                        regs = regs[cols_reg]
+                    
+                    except DriverError:
+                        cols_reg = ['BUSINST', 'VREG', 'BANDWIDTH']
+                        regs = pd.DataFrame(np.nan, columns=cols_reg, index=[])
+                        msg = "El nombre del archivo shp de la capa de "
+                        msg += "reguladores de tensión debe ser igual al nombre de la capa"
+                        title = "Error al encontrar capa"
+                        QMessageBox.information(None, title, msg)
+                        return None
+                
+                # CAPACITORES
+                if layer_cap == [] or layer_cap == 0:
+                    cols_cap = ["BUSINST", "OBJMAX", "OBJMIN"]
+                    caps = pd.DataFrame()
+                else:
+                    try:
+                        caps, layer_caps = self.AttributeTable_ToDataframe(layer_cap[0])
+                        # Filtrar por los capacitores que únicamente son para controlar tensión
+                        caps = caps[caps["CONTROL"]== "V"].loc[:,["BUSINST", "OBJ_MAX", "OBJ_MIN"]]
+
+                    except DriverError:
+                        caps = pd.DataFrame(np.nan, columns=["BUSINST", "OBJ_MAX", "OBJ_MIN"], index=[])
+                        msg = "El nombre del archivo shp de la capa de "
+                        msg += "capacitores debe ser igual al nombre de la capa"
+                        title = "Error al encontrar capa"
+                        QMessageBox.information(None, title, msg)
+                        return None
 
                 # Loads info
                 # BT
@@ -1506,6 +1659,7 @@ class ired:
                         vect_loads = []
                         for name_shape in layer_load_bt:
                             lv_loads_layer, layer_loads_lv = self.AttributeTable_ToDataframe(name_shape)
+                            lv_loads_layer['LV_GROUP'] = lv_loads_layer['LV_GROUP'].astype(float)
                             # lv_loads_layer = gp.read_file(name_shape + ".shp")
                             vect_loads.append(lv_loads_layer)
                         lv_loads_layer = pd.concat(vect_loads, sort=True)
@@ -1516,6 +1670,7 @@ class ired:
                         msg += "cargas de BT debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
+                        return None
 
                 # MT
                 if layer_mt_loads == [] or layer_mt_loads == 0:
@@ -1534,6 +1689,7 @@ class ired:
                         msg += "cargas de MT debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
+                        return None
 
                 # Tienen que haber cargas de baja o de media
                 if (mv_loads_layer.empty is True
@@ -1547,6 +1703,7 @@ class ired:
 
                 # Pdevice info
                 # Fusibles
+
                 if layer_fuses == [] or layer_fuses == 0:
                     cols = ['PHASEDESIG', 'NC', 'OPERATINGV',  'bus1',
                             'bus2', 'DSSNAME', 'MV_GROUP', 'HC',
@@ -1555,7 +1712,7 @@ class ired:
                                               index=[])
                 else:
                     try:
-                        fuse_layer, layer_fuses = self.AttributeTable_ToDataframe(layer_fuses[0])
+                        fuse_layer, layer_fuse = self.AttributeTable_ToDataframe(layer_fuses[0])
                         # fuse_layer = gp.read_file(layer[0] + ".shp")
                         fuse_layer['HC'] = fuse_layer['HC'].apply(lambda x:
                                                                   unidecode(str(x)).strip().upper())
@@ -1573,7 +1730,13 @@ class ired:
                         msg += "fusibles debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
-                    # fuse_layer = fuse_layer.iloc[0:2,:]
+                        return None
+                    except KeyError:
+                        cols = ['PHASEDESIG', 'NC', 'OPERATINGV',  'bus1',
+                                'bus2', 'DSSNAME', 'MV_GROUP', 'HC',
+                                'SAVE','COORDINATE', 'geometry']
+                        fuse_layer = pd.DataFrame(np.nan, columns=cols,
+                                                  index=[])
 
                 # Reconectadores
                 cols_rec = ['NOMVOLT','PHASEDESIG', 'NOMINALVOL',
@@ -1599,47 +1762,89 @@ class ired:
                         msg += "reclosers debe ser igual al nombre de la capa"
                         title = "Error al encontrar capa"
                         QMessageBox.information(None, title, msg)
+                        return None
+                    except KeyError:
+                        recloser_layer = pd.DataFrame(np.nan, columns=cols_rec,
+                                                  index=[])
+                
+                # DERs pequeña escala
+                
+                if layer_der_ss == [] or layer_der_ss == 0:
+                    der_ss = pd.DataFrame()
+                else:
+                    try:
+                        der_ss, layer_ders_ss = self.AttributeTable_ToDataframe(layer_der_ss[0])
+
+                    except DriverError:
+                        der_ss = pd.DataFrame(np.nan, columns=["KVA", "LV_GROUP"])
+                        msg = "El nombre del archivo shp de la capa de "
+                        msg += "DERs de pequeña escala debe ser igual al nombre de la capa"
+                        title = "Error al encontrar capa"
+                        QMessageBox.information(None, title, msg)
+                        return None
+               
+                # DER gran escala
+                
+                if layer_der_ls == [] or layer_der_ls == 0:
+                    der_ls = pd.DataFrame()
+                else:
+                    try:
+                        der_ls, layer_ders_ls = self.AttributeTable_ToDataframe(layer_der_ls[0])
+
+                    except DriverError:
+                        der_ls = pd.DataFrame()
+                        msg = "El nombre del archivo shp de la capa de "
+                        msg += "DERs de gran escala debe ser igual al nombre de la capa"
+                        title = "Error al encontrar capa"
+                        QMessageBox.information(None, title, msg)
+                        return None
+
+                end_lectura_capas = time.time()
+                
+                print("Tiempo de lectura de capas: "+str(np.round(end_lectura_capas - start_lectura_capas,3))+" s")
                 
                 start = time.time()
                 firstLine = self.firstLine(dir_network)  # first line name
                 if firstLine == 0:
                     return
                 Circuit = self.dlg.lineEdit_circuit_name.text()
+                
                 # Name of the load curve of the circuit
                 load_curve_circuit = self.dlg.lineEdit_load_curve.text()
                 if load_curve_circuit:
-                    with io.open(load_curve_circuit, 'rt', encoding = "ascii")as workbook:
-                        try:
-                            reader = csv.reader(workbook)
-                            next(reader)
-
-                            circuit_demand = [[row[3], row[2], row[0], row[1]] for row in
-                                              reader]  #day, hour, P (kW), Q (kVAr)
-                            workbook.closed
-                        except Exception:
-                            self.print_error()
-                            msg = "Curva de demanda del alimentador errónea"
-                            QMessageBox.information(None, "Informacion errónea", msg)
-                            return None
+                    circuit_demand = loadFeederLoadCurve(load_curve_circuit)
+                    if circuit_demand is None:
+                        return None # Si la curva no es válida, sale del código     
                 else:
-                    msg = "Debe indicar la curva del alimentador"
+                    msg = "Debe indicar la curva del alimentador. \n"
+                    msg += "Recuerde que la extensión requerida es de tipo .csv"
                     QMessageBox.critical(None, "Error", msg)
                     return None
 
                 snapshotdate = self.dlg.lineEdit_snapshot_date.text().upper()
                 if not snapshotdate:
-                        snapshotdate = auxfcns.selection_representative_day(load_curve_circuit, 'weekday')
+                    snapshotdate = auxfcns.selection_representative_day(load_curve_circuit, 'weekday')
                 snapshottime = self.dlg.lineEdit_snapshot_time.text()
+                
+                if snapshotdate not in circuit_demand[0]:
+                    msg = "La fecha no está incluida en el archivo de curva del alimentador del circuito \n"
+                    msg += "Favor corregir. Verificar también que el formato de la fecha especificada coincida con el de la curva"
+                    QMessageBox.critical(None, "Error", msg)
+                    return None
 
-                # Se selecciona si es large scale (ls) o small scale (ss)
+                # Se selecciona si es large scale (ls) o small scale (ss) o estudio base (bs)
                 current_index = self.dlg.tabWidget.currentIndex()
+                bs = False
                 ls = False
                 ss = False
 
                 if current_index == 0:
-                    ls = True
+                    bs = True
                 elif current_index == 1:
+                    ls = True
+                elif current_index == 2:
                     ss = True
+                
                 Overvoltage_analysis = False
                 VoltageDeviation_analysis = False
                 VoltageRegulation_analysis = False
@@ -1653,7 +1858,7 @@ class ired:
 
                 tmp = setUpCOMInterface()
                 DSSobj, DSSstart, DSStext, DSScircuit, DSSprogress = tmp
-                Grafo = circuit_graph(nodes_mv, lines_mv)  # Grafo
+                Grafo = circuit_graph_mv(nodes_mv, lines_mv)  # Grafo
 
                 # ? Leer como en el rojo
                 tx_modelling = True
@@ -1664,13 +1869,46 @@ class ired:
                 firstLine = self.create_master(dir_network, name_file_created,
                                        tx_modelling, volt_nom)
                 print("firstLine = ", firstLine)
+                
+                # #####################################################
+                # #####################################################
+                # ############## ESTUDIOS BASE ########################
+                # #####################################################
+                # #####################################################
+                if bs is True:
+                
+                    if self.dlg.checkBox_estudiobase1.isChecked():
+                        Estudio1 = True
+                    else:
+                        Estudio1 = False
+                    
+                    if self.dlg.checkBox_estudiobase3.isChecked():
+                        Estudio2 = True
+                    else:
+                        Estudio2 = False
+                
+                    # Estudio 1: Verificación de los niveles de tensión
+                    
+                    if Estudio1 is True:
+                        base_study_1(DSStext, DSScircuit, dir_network, firstLine)
+                    
+                    # Estudio 3: Snapshot de la red con DER existentes.
+                    if Estudio2 is True:
+                        base_study_2(DSSprogress, DSStext, DSScircuit, DSSobj, snapshotdate, snapshottime, dir_network, tx_modelling, firstLine, substation_type, 
+                        line_tx_definition, der_ss, der_ls, circuit_demand)
 
+                
                 # #####################################################
                 # #####################################################
                 # ############## GRAN ESCALA ##########################
                 # #####################################################
                 # #####################################################
-                if ls is True:
+                
+                elif ls is True:
+                    report_txt = []
+                    report_txt.append("************************* \n") 
+                    report_txt.append("ESTUDIO DE GRAN ESCALA \n") 
+                    report_txt.append("************************* \n") 
                     """
                     Criterios de tensión:
                     Son simulaciones de flujo de potencia en estado estable (snapshot)
@@ -1691,10 +1929,10 @@ class ired:
                     Criterios de protecciones:
                     Son simulaciones con fallas, cortos circuitos
                     """
+                    
                     # Aumento de corriente de falla
                     if self.dlg.cf_ls.isChecked():
                         FF_analysis = True
-                        
                     # Disparo simpático
                     if self.dlg.st_ls.isChecked():
                         SympatheticTripping_analysis = True
@@ -1704,14 +1942,17 @@ class ired:
                     # Reducción de alcance (RoR)
                     if self.dlg.rr_ls.isChecked():
                         RoR_analysis = True
+                    
+                    # Para saber si al menos hay un criterio de protección a evaluar 
+                    protec_analysis = ((FF_analysis) or (SympatheticTripping_analysis) or (BFC_analysis) or (RoR_analysis))
 
                     # Criterios termicos
-                    if self.dlg.cf_ls.isChecked():
+                    if self.dlg.checkBox_thermal_ls.isChecked():
                         Thermal_analysis = True
 
                     # Fallas seleccionadas
                     faulttypes = []
-                    if self.dlg.Box_fails_ls.isEnabled():
+                    if self.dlg.Box_faults_ls.isEnabled():
                         if self.dlg.abcg_ls.isChecked():
                             faulttypes.append('ABCG')
                         if self.dlg.abg_ls.isChecked():
@@ -1732,11 +1973,13 @@ class ired:
                             faulttypes.append('BG')
                         if self.dlg.cg_ls.isChecked():
                             faulttypes.append('CG')
+                    
                     # Parámetros estudios
                     max_increase_bfc = self.dlg.inc_max_rf_ls.value()
                     max_reduction = self.dlg.red_max_ls.value()
                     max_reduction = 1 - max_reduction/100
-                    Izero_trip = self.dlg.i_trip_ls.value()
+                    I_trip_51p = self.dlg.I_trip_51p_ls.value()
+                    I_trip_51g = self.dlg.I_trip_51g_ls.value()
                     max_increase_ff = self.dlg.max_perc_cf_ls.value()
                     max_increase_ff = 1 + max_increase_ff/100
                     max_lv_dev = self.dlg.unbalance_bt_ls.value()/100
@@ -1747,8 +1990,17 @@ class ired:
                     # Otros parámetros
                     TotalCapacityMax = self.dlg.maximum_capacity_ls.value()
                     der_step = self.dlg.steps_ls.value()
+                    
                     # Aporte de cortocircuito RD
-                    icc_ls = self.dlg.ap_cc_ls.value()
+                    
+                    self.select_type_DER()
+                    
+                    if self.dlg.DER_PV.isChecked():
+                        der_type = "INV"
+                        der_type_val = self.dlg.ap_cc_ls.value()/100
+                    elif self.dlg.DER_MS.isChecked():
+                        der_type = "MS"
+                        der_type_val = self.dlg.ap_ms.value()
 
                     # Caso en que no seleccione ningún análisis
                     if (Overvoltage_analysis is False and VoltageDeviation_analysis is False and
@@ -1760,6 +2012,73 @@ class ired:
                         title = "Final"
                         QMessageBox.information(None, title, msg)
                         return None
+                    
+                    # Caso en el que se seleccione un estudio con protecciones, pero no hay capa de fusibles ni reclosers:
+                    if ((protec_analysis is True) and (fuse_layer.empty is True and recloser_layer.empty is True)):
+                        msg  = "Se seleccionó un estudio de protecciones, pero las capas de fusibles y reclosers no están dentro del modelo"
+                        title = "Final"
+                        QMessageBox.information(None, title, msg)
+                        return None
+                        
+                    # Caso en el que se seleccione un estudio con protecciones, pero no hay tipo de fallas seleccionadas:
+                    if (protec_analysis is True) and (len(faulttypes) == 0):
+                        msg  = "Se seleccionó un estudio de protecciones, pero no se seleccionó ningún tipo de falla"
+                        title = "Final"
+                        QMessageBox.information(None, title, msg)
+                        return None
+                    
+                    # Reporte de criterios utilizados para el reporte de texto
+                    report_txt.append("CRITERIOS SELECCIONADOS: \n ")
+                    # Sobretensión
+                    if Overvoltage_analysis is True:
+                        report_txt.append("V: Sobretensión - Valor máximo: "+str(max_v)+" pu \n")
+                    # Desviación de tensión: 
+                    if VoltageDeviation_analysis is True:
+                        report_txt.append("V: Desviación de tensión - Porcentajes máximos: MT: "+str(np.round(100*max_mv_dev,2))+ " % - BT: "+str(np.round(100*max_lv_dev,2)) + " % \n")
+                    # Desbalance de tensión
+                    if VoltageUnbalance is True:
+                        report_txt.append("V: Desbalance de tensión - Porcentaje máximo: "+str(np.round(100*max_v_unb,2))+ " % \n")
+                    # Regulación de tensión 
+                    if VoltageRegulation_analysis is True:
+                        report_txt.append("V: Regulación de tensión \n")
+                    # Térmicos
+                    if Thermal_analysis is True:
+                        report_txt.append("T: Térmicos")
+                    # Aumento de corriente de falla:
+                    if FF_analysis is True:
+                        report_txt.append("P: Aumento de corriente de falla - Porcentaje máximo: "+str(np.round((max_increase_ff-1)*100,2))+" % \n")
+                    # Reducción de alcance
+                    if RoR_analysis is True:
+                        report_txt.append("P: Reducción de alcance - Porcentaje mínimo: "+str(np.round((max_reduction+1)*100,2))+" % \n")
+                    # Coordinación recloser-fusible
+                    if BFC_analysis is True:
+                        report_txt.append("P: Coordinación recloser-fusible - Corriente máxima de incremento: "+str(np.round(max_increase_bfc,2))+" A \n") 
+                    # Disparo indebido:
+                    if SympatheticTripping_analysis is True:
+                        report_txt.append("P: Disparo indebido \n") 
+                    # Tipo de fallas estudiadas
+                    if ((FF_analysis) or (RoR_analysis) or (BFC_analysis) or (SympatheticTripping_analysis)) is True:
+                        report_txt.append("Las fallas seleccionadas son las siguientes: "+str(faulttypes)+" \n") 
+                    # Otras propiedades seleccionadas:
+                    report_txt.append("************************* \n") 
+                    report_txt.append("Otras propiedades seleccionadas \n") 
+                    report_txt.append("************************* \n") 
+                    # Límite de instalación:
+                    report_txt.append("El límite de DERs seleccionados en la simulación es de: "+str(TotalCapacityMax)+" kW \n")
+                    # Steps:
+                    report_txt.append("El paso o cantidad máxima asignada por iteración es de: "+str(der_step)+" kW \n")
+                    # Tipo de generador
+                    
+                    if der_type == "INV":
+                        report_txt.append("Los generadores a simular son basados en inversores \n")
+                        report_txt.append("El aporte de cortocircuito de los generadores es de " +str(der_type_val*100)+" % de su respectiva corriente nominal \n")
+                    else:
+                        report_txt.append("Los generadores a simular son basados en máquina sincrónica + \n")
+                        report_txt.append("La reactancia transitoria de los generadores es de" +str(der_type_val)+" pu \n")
+                    
+                    report_txt.append("************************* \n") 
+                    report_txt.append("Análisis inicial del circuito \n") 
+                    report_txt.append("************************* \n") 
 
                     # Cálculos
                     vect = distance_nodes_MV(Grafo, nodes_mv, lines_mv, tx_layer, fixed_distance)
@@ -1767,17 +2086,12 @@ class ired:
                     chosen_buses_dict, chosen_buses_list, chosen_buses_df = vect
                     print("chosen_buses_df = ", chosen_buses_df)
 
-                    # %% SALIDAS DE FUNCIONES QUE CREAN DATAFRAMES DE PROTECCIONES
-                    CircuitBreakDvRoR, CircuitBreakDvFF_BFC = pDevices(Grafo, firstLine,
-                                                                       fuse_layer, recloser_layer)
-                    cols = ['BUSINST', 'VREG', 'BANDWIDTH']
-					
-                    if layer_reg != [] and layer_reg != 0:
-                        RegDevices, regs_layer = self.AttributeTable_ToDataframe(layer_reg[0])
-                        RegDevices = RegDevices[cols]
-                        print("RegDevices = ", RegDevices)
+                    # % SALIDAS DE FUNCIONES QUE CREAN DATAFRAMES DE PROTECCIONES
+                    if protec_analysis is True:
+                        CircuitBreakDvRoR, CircuitBreakDvFF_BFC = pDevices(Grafo, firstLine, fuse_layer, recloser_layer, FF_analysis, BFC_analysis)
                     else:
-                        RegDevices = pd.DataFrame(np.nan, columns=cols, index=[])
+                        CircuitBreakDvRoR = pd.DataFrame()
+                        CircuitBreakDvFF_BFC = pd.DataFrame()
 
                     # CIRCUIT BASE POWER FLOW
                     VBuses_b, Base_V = getbases(DSStext, DSScircuit, dir_network,
@@ -1802,7 +2116,16 @@ class ired:
                     No_DER_BFCCurrents = x[3]
                     kW_sim = x[4]
                     kVAr_sim = x[5]
-                    lv_loads_layer = x[6]
+                    reg_taps = x[6]
+                    cap_steps = x[7]
+                    lv_loads_layer = x[8]
+                    
+                    report_txt.append("Estudio base: Listo! \n") 
+                    
+                    # Función para determinar el nivel inicial de DER en el sistema:
+                    DERinstalled_buses_ini, DERinstalled_ini = getGDinstalled(der_ss)
+                    
+                    report_txt.append("El circuito posee "+str(DERinstalled_ini)+" kW de DER instalados desde el inicio \n") 
 
                     # Verificar (si puede ser vacío sin errores)
                     if NoDERsPF_Vbuses.empty is True:
@@ -1815,8 +2138,20 @@ class ired:
                     # begins the HC study
                     # While loop. It'll stop when all the MV_Groups are flagged
                     # begin with the loop whose variable is distance
-
+                    
+                    report_txt.append("************************* \n") 
+                    report_txt.append("Estudio de Capacidad de Alojamiento \n") 
+                    report_txt.append("************************* \n")
+                    
+                    redo_sim = False
+                    last_blacklisted_ov = []
+                    last_blacklisted_vd = []
+                    time_data = {}
+                    voltage_vals = {}
+                    overvoltage_vals = {}
+                    
                     report_dict = {}  # dict with all the info.
+                    
 
                     for bus in chosen_buses_df.index.values:  # goes over the node step
                         start_t_bus = time.time()
@@ -1855,11 +2190,13 @@ class ired:
                         while flag is False and n_loop*der_step <= TotalCapacityMax:
                             capacity_i = n_loop*der_step
                             blacklist = []
-                            msg = "\nSimulation installed capacity: "
-                            msg += str(capacity_i) + ' at bus:'
-                            msg += str(node_tuple[0]) + ' distance: '
-                            msg += str(chosen_buses_df.loc[bus, 'distance'])
+                            msg = "\n Simulación - Capacidad instalada: "
+                            msg += str(capacity_i) + ' kW en la barra:'
+                            msg += str(node_tuple[0]) + ' a una distancia desde la cabecera del circuito: '
+                            msg += str(np.round(chosen_buses_df.loc[bus, 'distance']/1000,2)) + " km"
                             print(msg)
+                            
+                            report_txt.append(msg)
 
                             # initialize the variables
                             Trafos = []
@@ -1867,8 +2204,7 @@ class ired:
                             DERs = []
 
                             Trafos, Trafos_Monitor, DERs = trafos_and_DERs_text_command([node_tuple],
-                                                                                        capacity_i)
-                            # print(Trafos)
+                                                                                        capacity_i, der_type, der_type_val)
 
                             # Compile model for simulation - run simulation taking into
                             # consideration the new GD installed
@@ -1877,7 +2213,7 @@ class ired:
                                      tx_modelling, substation_type,
                                      line_tx_definition, circuit_demand,
                                      Base_V, kW_sim, kVAr_sim,
-                                     DERs, Trafos, dir_network)
+                                     DERs, Trafos, dir_network, reg_taps, cap_steps)
 
                             # Check HC criteria - Here, the results
                             # dataframes are updated, with all limiting
@@ -1891,15 +2227,17 @@ class ired:
                             # Check HC criteria - Here, the results dataframes are
                             # updated, with all limiting criteria
                             # characteristics being monitored
-                            x = pq_voltage(DSScircuit, DSStext, dir_network,
-                                            Base_V, loadslv_buses, loadsmv_buses,
-                                            RegDevices, capacity_i, lv_groups,
-                                            tx_groups, NoDERsPF_Vbuses,
+                            x = pq_voltage(DSScircuit, DSStext, dir_network, Base_V, loadslv_buses, loadsmv_buses,
+                                            regs, caps, capacity_i, lv_groups, tx_groups, NoDERsPF_Vbuses,
                                             Overvoltage_loads_df, Overvoltage_rest_df,
                                             Voltagedeviation_loads_df, Voltagedeviation_rest_df,
                                             Voltagedeviation_reg_df, Voltageunbalance_df,
                                             Overvoltage_analysis, VoltageDeviation_analysis,
-                                            VoltageRegulation_analysis, VoltageUnbalance)
+                                            VoltageRegulation_analysis, VoltageUnbalance,
+                                            max_v, max_lv_dev, max_mv_dev, max_v_unb, 
+                                            redo_sim, last_blacklisted_ov, last_blacklisted_vd, voltage_vals, overvoltage_vals, 
+                                            report_txt)
+                                                
                             VBuses = x[0]
                             Overvoltage_loads_df = x[1]
                             Voltagedeviation_loads_df = x[2]
@@ -1907,43 +2245,51 @@ class ired:
                             Voltagedeviation_rest_df = x[4]
                             Voltagedeviation_reg_df = x[5]
                             Voltageunbalance_df = x[6]
+                            last_blacklisted_vd = x[7]
+                            temp_VDlr_list = x[8]
+                            voltage_vals = x[9]
+                            overvoltage_vals = x[10]
+                            report_txt = x[11]
 
                             x = thermal_Lines_Tx(DSScircuit, DSStext, normalAmpsDic,
                                                  capacity_i, line_lv_groups, tx_groups,
                                                  Thermal_loading_lines_df, Thermal_loading_tx_df,
-                                                 name_file_created, linelvgroups, Thermal_analysis)
-                            Thermal_loading_lines_df, Thermal_loading_tx_df, CurrentDF = x
+                                                 name_file_created, linelvgroups, Thermal_analysis, report_txt)
+                            Thermal_loading_lines_df, Thermal_loading_tx_df, CurrentDF, report_txt = x
 
-                            FFCurrents, BFCCurrents = FF_BFC_Current(DSScircuit, DSStext,
+                            FFCurrents, BFCCurrents, report_txt = FF_BFC_Current(DSScircuit, DSStext,
                                                                      dir_network, firstLine,
-                                                                     snapshottime, snapshotdate,
+                                                                     snapshottime, snapshotdate, circuit_demand,
                                                                      kW_sim, kVAr_sim,  capacity_i,
                                                                      Trafos, DERs, No_DER_FFCurrents,
                                                                      FFCurrents, No_DER_BFCCurrents,
                                                                      BFCCurrents, faulttypes,
-                                                                     FF_analysis, BFC_analysis)
+                                                                     FF_analysis, BFC_analysis,
+                                                                     max_increase_ff, max_increase_bfc, report_txt)
 
-                            RoRCurrents = ReductionReach(DSScircuit, DSStext,
+                            RoRCurrents, report_txt = ReductionReach(DSScircuit, DSStext,
                                                          dir_network, firstLine,
                                                          snapshottime, snapshotdate,
-                                                         kW_sim, kVAr_sim, capacity_i,
+                                                         kW_sim, kVAr_sim, circuit_demand, capacity_i,
                                                          Trafos, DERs, No_DER_RoRCurrents,
-                                                         RoRCurrents, faulttypes, RoR_analysis)
+                                                         RoRCurrents, faulttypes, RoR_analysis,
+                                                         max_reduction, report_txt)
 
-                            SympatheticTripping_df = SympatheticTripping(DSStext, DSScircuit,
+                            SympatheticTripping_df, report_txt = SympatheticTripping(DSStext, DSScircuit,
                                                                          dir_network, firstLine,
                                                                          snapshotdate, snapshottime,
-                                                                         kW_sim, kVAr_sim, capacity_i,
-                                                                         Trafos, DERs,
+                                                                         kW_sim, kVAr_sim, circuit_demand, 
+                                                                         capacity_i, Trafos, DERs,
                                                                          SympatheticTripping_analysis,
-                                                                         faulttypes, Izero_trip,
-                                                                         SympatheticTripping_df)
+                                                                         faulttypes, I_trip_51p, I_trip_51g,
+                                                                         SympatheticTripping_df, report_txt)
 
-                            msg = 'Checkpoint - distance= '
-                            msg += str(chosen_buses_df.loc[bus, 'distance'])
-                            msg += ' bus=' + str(node_tuple[0])
-                            msg += ' Capacity: ' + str(capacity_i)
+                            msg = 'Checkpoint - distancia = '
+                            msg += str(np.round(chosen_buses_df.loc[bus, 'distance']/1000,2)) + " km"
+                            msg += ' barra= ' + str(node_tuple[0])
+                            msg += ' Capacidad instalada: ' + str(capacity_i) +" kW"
                             print(msg)
+                            report_txt.append(msg)
 
                             # at the end:
                             x = flag_and_blacklist_calc(Overvoltage_loads_df, Voltagedeviation_loads_df,
@@ -1962,16 +2308,18 @@ class ired:
                             if flag is False:
                                 if redo_sim is False:
                                     if capacity_i < TotalCapacityMax:
-                                        print('Checkpoint - Capacity: '+str(capacity_i))
+                                        print('Checkpoint - Capacidad instalada: '+str(capacity_i))
                                         #at the end:
                                         n_loop += 1
                                     else:
-                                        msg = 'Final Checkpoint - Maximal capacity '
-                                        msg += 'reached: ' + str(capacity_i)
+                                        msg = 'Checkpoint Final - Máxima capacidad alcanzada: '
+                                        msg +=  str(capacity_i)
                                         print(msg)
+                                        # report_txt.append(msg)
                                         final_der = capacity_i
                                         chosen_buses_df.loc[bus, 'max_kVA'] = final_der
                                         chosen_buses_df.loc[bus, 'flag'] = 'None'
+                                        
                                         
                                         report_dict[bus]['max_kVA'] = final_der
                                         tmp = save_criteria_data_iterative(report_dict[bus]['vtp_criteria'],
@@ -1988,18 +2336,19 @@ class ired:
                                         report_dict[bus]['vtp_criteria'] = tmp
                                         end_t_bus = time.time()
                                         sim_time_t_bus = end_t_bus - start_t_bus
-                                        msg = 'Simulation time: '
-                                        msg += str(round(sim_time_t_bus,2)) + ' sec.'
+                                        msg = 'Tiempo de simulación: '
+                                        msg += str(round(sim_time_t_bus,2)) + ' s.'
                                         print(msg)
                                         #at the end:
                                         n_loop += 1
                                 else:
                                     final_der = capacity_i
                                     chosen_buses_df.loc[bus, 'max_kVA'] = final_der
-                                    chosen_buses_df.loc[bus, 'flag'] = 'voltage/thermic'
-                                    msg = 'Checkpoint - Capacity: ' + str(capacity_i)
-                                    msg += '- there are voltage/thermic problems'
+                                    chosen_buses_df.loc[bus, 'flag'] = 'tensión/térmicos'
+                                    msg = 'Checkpoint - Capacidad: ' + str(capacity_i)
+                                    msg += ' kW - existen problemas de tensión o térmicos '
                                     print(msg)
+                                    report_txt.append(msg)
                                     
                                     report_dict[bus]['max_kVA'] = final_der
                                     report_dict[bus]['vtp_criteria'] = save_criteria_data_iterative(report_dict[bus]['vtp_criteria'],
@@ -2013,13 +2362,16 @@ class ired:
                                     flag = True
                                     end_t_bus = time.time()
                                     sim_time_t_bus = end_t_bus - start_t_bus
-                                    msg = 'Simulation time: ' + str(round(sim_time_t_bus,2)) + ' sec.'
+                                    msg = 'Tiempo de simulación: ' + str(round(sim_time_t_bus,2)) + ' s.'
                                     print(msg)
+                                    report_txt.append(msg)
 
                             else:
-                                msg = 'Final Checkpoint - Maximal capacity reached: '
+                                msg = 'Checkpoint Final - La máxima capacidad instalada fue de: '
                                 msg += str(capacity_i - der_step)
+                                report_txt.append(msg)
                                 print(msg)
+                                
                                 flag_list_str = ''
                                 for crit in range(len(flag_list)):
                                     if len(flag_list) == 1:
@@ -2032,9 +2384,11 @@ class ired:
                                         else:
                                             flag_list_str += flag_list[crit]
 
-                                msg = 'The ' + flag_list_str
-                                msg += ' criteria forced the simulation to stop' 
+                                msg = 'El/los criterios ' + flag_list_str
+                                msg += ' pararon la simulación' 
                                 print(msg)
+                                report_txt.append(msg)
+                                
                                 final_der = capacity_i - der_step
                                 chosen_buses_df.loc[bus, 'max_kVA'] = final_der
                                 chosen_buses_df.loc[bus, 'flag'] = flag_list_str
@@ -2054,9 +2408,10 @@ class ired:
                                 report_dict[bus]['vtp_criteria'] = tmp
                                 end_t_bus = time.time()
                                 sim_time_t_bus = end_t_bus - start_t_bus
-                                msg = 'Simulation time: '
-                                msg += str(round(sim_time_t_bus,2)) + ' sec.'
+                                msg = 'Tiempo de simulación: '
+                                msg += str(round(sim_time_t_bus,2)) + ' s.'
                                 print(msg)
+                                # report_txt.append(msg)
 
                             if n_loop*der_step > TotalCapacityMax:
                                 final_der = capacity_i
@@ -2079,11 +2434,11 @@ class ired:
                                 report_dict[bus]['vtp_criteria'] = tmp
                                 end_t_bus = time.time()
                                 sim_time_t_bus = end_t_bus - start_t_bus
-                                msg = 'Simulation time: ' + str(round(sim_time_t_bus,2))
-                                msg += ' sec.\n'
-                                msg += 'Final Checkpoint - The defined maximal '
-                                msg += 'capacity was reached: ' + str(capacity_i)
+                                msg = 'Tiempo de simulación: ' + str(round(sim_time_t_bus,2)) +" s \n"
+                                msg += 'Checkpoint Final  - La máxima capacidad definida fue alcanzada '
+                                msg += str(capacity_i) + " kW"
                                 print(msg)
+                                report_txt.append(msg)
                     
                     # Inicio
                     Voltage_comp  = Overvoltage_analysis and VoltageDeviation_analysis and VoltageRegulation_analysis and VoltageUnbalance
@@ -2091,61 +2446,77 @@ class ired:
 
                     tmp = data_grouping_iterative(Grafo, chosen_buses_df, fixed_distance,
                                                   lines_mv, lines_mv_oh_layer_original,
-                                                  lines_mv_ug_layer_original,
-                                                  Voltage_comp,
-                                                  Thermal_analysis, Prot_comp)
+                                                  lines_mv_ug_layer_original)
+                                                  
                     lines_mv_oh_layer_original = tmp[0]
                     lines_mv_ug_layer_original = tmp[1]
-                    name_col = tmp[2]
+                    name_col = "HC_RES_LS"
 
                     # Guardan resultados
                     self.msg_final += "\nResultados gran escala:\n"
                     
                     col_sel = ['distance', 'max_kVA', 'flag']
-                    try:
-                        out_chosen_buses = chosen_buses_df[col_sel]
-                        out_chosen_buses.to_csv(self.output + "/chosen_buses.csv")
-                        self.msg_final += str(out_chosen_buses)
-                    except Exception:
-                        chosen_buses_df.to_csv(self.output + "/chosen_buses.csv")
-                        self.msg_final += str(chosen_buses_df)
+                    # try:
+                        # out_chosen_buses = chosen_buses_df[col_sel]
+                        # out_chosen_buses.to_csv(self.output + "/chosen_buses.csv")
+                        # self.msg_final += str(out_chosen_buses)
+                    # except Exception:
+                        # chosen_buses_df.to_csv(self.output + "/chosen_buses.csv")
+                        # self.msg_final += str(chosen_buses_df)
                     
                     # Se guardan los resultados en un txt
                     output_ = self.output + '/Resultados_ls.txt'
                     with open(output_, 'w') as file_:
                         file_.write(self.msg_final)
+                        
+                    n_ranges = []  # Declare the ranges variable outside the if statements
+                    
                     if layer_mt_aer != [] and layer_mt_aer != 0:
                         self.save_dataframe(lines_mv_oh_layer_original,
                                             layer_mv_oh, name_col)
-                        self.categ_layer(lines_mv_oh_layer_original,
+                        n_ranges = self.categ_layer(lines_mv_oh_layer_original,
                                          layer_mv_oh, name_col)
                     if layer_mt_sub != [] and layer_mt_sub != 0:
                         self.save_dataframe(lines_mv_ug_layer_original,
                                             layer_mv_ug, name_col)
-                        self.categ_layer(lines_mv_ug_layer_original,
-                                            layer_mv_ug, name_col)
+                        n_ranges2 = self.categ_layer(lines_mv_ug_layer_original,
+                                            layer_mv_ug, name_col, n_ranges)
                     
-                    if layer_mt_loads != [] and layer_mt_loads != 0:
-                        self.save_dataframe(mv_loads_layer,
-                                            layer_mv_loads, name_col)
-                    # %% Reports how many minutes the simulation took
+                    # Crea carpeta para resultados en caso de que no exista
+                    res_ls_dir = dir_general+"\\HC_RES_LS"
+                    res_ls_crit_dir = res_ls_dir+"\\Resultados_Criterios"
+                    
+                    if not os.path.exists(res_ls_dir):
+                        os.makedirs(res_ls_dir)
+                    
+                    # Guarda el reporte de resultados
+                    with open(res_ls_dir+'\\seguimiento_resultados.txt', 'w') as f:
+                        f.writelines("%s\n" % line for line in report_txt)
+
+
                     end = time.time()
                     sim_time = end - start
-                    filename_ = self.output + '/Tsim.txt'
-                    with open(filename_, 'w') as f:
-                         f.write('El tiempo de simulacion fue: ' + str(sim_time))
-                    f.close()
-                    end = time.time()
-                    sim_time = end - start
-                    msg = 'Simulation time: ' + str(round(sim_time/60, 2)) + ' min.'
+                    msg = 'Tiempo de simulación: ' + str(round(sim_time/60, 2)) + ' min.'
                     print(msg)
+                    
+                    msg  = "Simulación finalizada exitosamente \n"
+                    msg += 'Tiempo de simulación: '
+                    msg += str(round(sim_time/60, 2)) + ' min.'
+                    msg += "\n Los resultados se guardaron en el siguiente "
+                    msg += "directorio: " + res_ls_dir
+                    title = "Final"
+                    QMessageBox.information(None, title, msg)
 
                 # #####################################################
                 # #####################################################
                 # ################ PEQUEÑA ESCALA #####################
                 # #####################################################
                 # #####################################################
-                if ss is True:
+                elif ss is True:
+                    report_txt = []
+                    report_txt.append("************************* \n") 
+                    report_txt.append("ESTUDIO DE PEQUEÑA ESCALA \n") 
+                    report_txt.append("************************* \n") 
                     """
                     Criterios de tensión:
                     Son simulaciones de flujo de potencia en estado estable (snapshot)
@@ -2153,30 +2524,22 @@ class ired:
                     # Sobretensión
                     if self.dlg.overvoltage_ss.isChecked():
                         Overvoltage_analysis = True
-                        
                     # Regulación de tensión
                     if self.dlg.checkBox_regulation_ss.isChecked():
                         VoltageRegulation_analysis = True
                     # Desbalance de tensión
                     if self.dlg.unbalance_ss.isChecked():
                         VoltageUnbalance = True
-                        
                     # Desviación de tensión
                     if self.dlg.voltage_deviation_ss.isChecked():
                         VoltageDeviation_analysis = True
-
-                    # Limitar instalación máxima del trafo
-                    if self.dlg.checkBox_lim_cap_traf.isChecked():
-                        lim_kVA = True
-                    else:
-                        lim_kVA = False
 
                     """
                     Criterios de protecciones:
                     Son simulaciones con fallas, cortos circuitos
                     """
                     # Aumento de corriente de falla
-                    if self.dlg.cf_ls.isChecked():
+                    if self.dlg.cf_ss.isChecked():
                         FF_analysis = True
                         
                     # Disparo simpático
@@ -2191,13 +2554,25 @@ class ired:
                     if self.dlg.rr_ss.isChecked():
                         RoR_analysis = True
                         
+                    # Para saber si al menos hay un criterio de protección a evaluar 
+                    protec_analysis = ((FF_analysis) or (SympatheticTripping_analysis) or (BFC_analysis) or (RoR_analysis))
+                    
+                    """
+                    Criterios térmicos:
+                    """
                     # Criterios termicos
-                    if self.dlg.cf_ls.isChecked():
+                    if self.dlg.checkBox_thermal_ss.isChecked():
                         Thermal_analysis = True
-
+                    
+                    # Limitar instalación máxima del trafo
+                    if self.dlg.checkBox_lim_cap_traf.isChecked():
+                        lim_kVA = True
+                    else:
+                        lim_kVA = False
+                        
                     # Fallas seleccionadas
                     faulttypes = []
-                    if self.dlg.Box_fails_ss.isEnabled():
+                    if self.dlg.Box_faults_ss.isEnabled():
                         if self.dlg.abcg_ss.isChecked():
                             faulttypes.append('ABCG')
                         if self.dlg.abg_ss.isChecked():
@@ -2218,11 +2593,13 @@ class ired:
                             faulttypes.append('BG')
                         if self.dlg.cg_ss.isChecked():
                             faulttypes.append('CG')
+                    
                     # Parametros de estudios
                     max_reduction = self.dlg.red_max_ss.value()
                     max_reduction = 1 - max_reduction/100
                     max_increase_bfc = self.dlg.inc_max_rf_ss.value()
-                    Izero_trip = self.dlg.i_trip_ss.value()
+                    I_trip_51p = self.dlg.I_trip_51p_ss.value()
+                    I_trip_51g = self.dlg.I_trip_51g_ss.value()
                     max_increase_ff = self.dlg.max_perc_cf_ss.value()
                     max_increase_ff = 1 + max_increase_ff/100
                     max_v = self.dlg.overvolt_ss.value()
@@ -2235,7 +2612,7 @@ class ired:
                     max_kVA_step = self.dlg.steps_lv_ss.value()
                     max_kVA_mvloads = self.dlg.steps_mv_ss.value()
                     # Aporte de cortocircuito RD
-                    icc_ss = self.dlg.ap_cc_ss.value()
+                    icc_ss = self.dlg.ap_cc_ss.value()/100
 
                     # Caso en que no seleccione ningún análisis
                     if (Overvoltage_analysis is False and VoltageDeviation_analysis is False and
@@ -2247,18 +2624,83 @@ class ired:
                         title = "Final"
                         QMessageBox.information(None, title, msg)
                         return None
-
-                    # %% SALIDAS DE FUNCIONES QUE CREAN DATAFRAMES DE PROTECCIONES
-                    CircuitBreakDvRoR, CircuitBreakDvFF_BFC = pDevices(Grafo, firstLine,
-                                                                    fuse_layer, recloser_layer)
-                    cols = ['BUSINST', 'VREG', 'BANDWIDTH']
-					
-                    if layer_reg != [] and layer_reg != 0:
-                        RegDevices, regs_layer = self.AttributeTable_ToDataframe(layer_reg[0])
-                        RegDevices = RegDevices[cols]
-                        print("RegDevices = ", RegDevices)
+                    
+                    # Caso en el que se seleccione un estudio con protecciones, pero no hay capa de fusibles ni reclosers:
+                    if ((protec_analysis is True) and (fuse_layer.empty is True and recloser_layer.empty is True)):
+                        msg  = "Se seleccionó un estudio de protecciones, pero las capas de fusibles y reclosers no están dentro del modelo"
+                        title = "Final"
+                        QMessageBox.information(None, title, msg)
+                        return None
+                    
+                    # Caso en el que se seleccione un estudio con protecciones, pero no hay tipo de fallas seleccionadas:
+                    if (protec_analysis is True) and (len(faulttypes) == 0):
+                        msg  = "Se seleccionó un estudio de protecciones, pero no se seleccionó ningún tipo de falla"
+                        title = "Final"
+                        QMessageBox.information(None, title, msg)
+                        return None
+                        
+                    # Reporte de criterios utilizados para el reporte de texto
+                    report_txt.append("CRITERIOS SELECCIONADOS: \n ")
+                    # Sobretensión
+                    if Overvoltage_analysis is True:
+                        report_txt.append("V: Sobretensión - Valor máximo: "+str(max_v)+" pu \n")
+                    # Desviación de tensión: 
+                    if VoltageDeviation_analysis is True:
+                        report_txt.append("V: Desviación de tensión - Porcentajes máximos: MT: "+str(np.round(100*max_mv_dev,2))+ " % - BT: "+str(np.round(100*max_lv_dev,2)) + " % \n")
+                    # Desbalance de tensión
+                    if VoltageUnbalance is True:
+                        report_txt.append("V: Desbalance de tensión - Porcentaje máximo: "+str(np.round(100*max_v_unb,2))+ " % \n")
+                    # Regulación de tensión 
+                    if VoltageRegulation_analysis is True:
+                        report_txt.append("V: Regulación de tensión \n")
+                    # Térmicos
+                    if Thermal_analysis is True:
+                        report_txt.append("T: Térmicos")
+                    # Aumento de corriente de falla:
+                    if FF_analysis is True:
+                        report_txt.append("P: Aumento de corriente de falla - Porcentaje máximo: "+str(np.round((max_increase_ff-1)*100,2))+" % \n")
+                    # Reducción de alcance
+                    if RoR_analysis is True:
+                        report_txt.append("P: Reducción de alcance - Porcentaje mínimo: "+str(np.round((max_reduction+1)*100,2))+" % \n")
+                    # Coordinación recloser-fusible
+                    if BFC_analysis is True:
+                        report_txt.append("P: Coordinación recloser-fusible - Corriente máxima de incremento: "+str(np.round(max_increase_bfc,2))+" A \n") 
+                    # Disparo indebido:
+                    if SympatheticTripping_analysis is True:
+                        report_txt.append("P: Disparo indebido \n") 
+                    # Tipo de fallas estudiadas
+                    if ((FF_analysis) or (RoR_analysis) or (BFC_analysis) or (SympatheticTripping_analysis)) is True:
+                        report_txt.append("Las fallas seleccionadas son las siguientes: "+str(faulttypes)+" \n") 
+                    # Otras propiedades seleccionadas:
+                    report_txt.append("************************* \n") 
+                    report_txt.append("Otras propiedades seleccionadas \n") 
+                    report_txt.append("************************* \n") 
+                    # Topeo de transformadores
+                    if lim_kVA is True:
+                        report_txt.append("Se seleccionó la opción de limitar la instalación de DER en el secundario de acuerdo a la capacidad del transformador correspondiente \n")
                     else:
-                        RegDevices = pd.DataFrame(np.nan, columns=cols, index=[])
+                        report_txt.append("NO se seleccionó la opción de limitar la instalación de DER en el secundario de acuerdo a la capacidad del transformador correspondiente \n")
+                    # Límite de instalación:
+                    report_txt.append("El límite de DERs seleccionados en la simulación es de: "+str(TotalCapacityMax)+" kW \n")
+                    # Steps:
+                    report_txt.append("El paso o cantidad máxima asignada al secundario con mayor demanda es de: "+str(max_kVA_step)+" kW \n")
+                    report_txt.append("El paso o cantidad máxima asignada a la carga MT de mayor demanda es de: "+str(max_kVA_mvloads)+" kW \n")
+                    # Aporte de corto
+                    report_txt.append("El aporte de cortocircuito para cada DER instalado es de " +str(icc_ss)+" % de su respectiva corriente nominal \n")
+                    
+                    report_txt.append("************************* \n") 
+                    report_txt.append("Análisis inicial del circuito \n") 
+                    report_txt.append("************************* \n") 
+                    
+                    # % SALIDAS DE FUNCIONES QUE CREAN DATAFRAMES DE PROTECCIONES
+                    if protec_analysis is True:
+                        CircuitBreakDvRoR, CircuitBreakDvFF_BFC = pDevices(Grafo, firstLine, fuse_layer, recloser_layer, FF_analysis, BFC_analysis)
+                        cols = ['BUSINST', 'VREG', 'BANDWIDTH']
+                    else:
+                        CircuitBreakDvRoR = pd.DataFrame()
+                        CircuitBreakDvFF_BFC = pd.DataFrame()
+                    
+
                     # %% CIRCUIT BASE POWER FLOW
                     VBuses_b, Base_V = getbases(DSStext, DSScircuit,
                                                 dir_network, firstLine,
@@ -2266,6 +2708,7 @@ class ired:
                     loadslv_buses, loadsmv_buses = getloadbuses(circname_azul + '_LoadsLV',
                                                                 circname_azul + '_LoadsMV',
                                                                 dir_network)
+                    
                     # Gets all the loads buses # Gets all the loads buses
                     vect_ret = base_Case_Run(DSStext, DSScircuit, DSSobj, DSSprogress,
                                             snapshotdate, snapshottime, firstLine,
@@ -2280,7 +2723,11 @@ class ired:
                     No_DER_BFCCurrents = vect_ret[3]
                     kW_sim = vect_ret[4]
                     kVAr_sim = vect_ret[5]
-                    lv_loads_layer = vect_ret[6]
+                    reg_taps = vect_ret[6]
+                    cap_steps = vect_ret[7]
+                    lv_loads_layer = vect_ret[8]
+                    
+                    report_txt.append("Estudio base: Listo! \n") 
 
                     normalAmpsDic = normalAmps(DSScircuit) # Gets normal capacity for lines
 
@@ -2297,11 +2744,18 @@ class ired:
                     BFCCurrents = pd.DataFrame()
                     SympatheticTripping_df = pd.DataFrame()
                     linelvgroups = []
+                    
+                    # Función para determinar el nivel inicial de DER en el sistema:
+                    DERinstalled_buses_ini, DERinstalled_ini = getGDinstalled(der_ss)
+                    
+                    report_txt.append("El circuito posee "+str(DERinstalled_ini)+" kW de DER instalados desde el inicio \n") 
 
                     # Función para tomar la info de txs y mvloads
                     LoadTrafos_MVLoads = base_info_tx_and_mvloads(DSScircuit, DSSobj,
-                                                                DSStext, Grafo, tx_layer,
+                                                                DSStext, Grafo, tx_layer, der_ss,
                                                                 mv_loads_layer)
+                                                                
+                    
                     # Función para tomar la info de las lv_loads
                     LV_hist_df, blacklist_ini = base_info_lvloads(lv_loads_layer,
                                                                 LoadTrafos_MVLoads,
@@ -2312,6 +2766,7 @@ class ired:
                     MV_hist_df, LV_hist_df = DER_calc(0, 0,
                                                     LoadTrafos_MVLoads,
                                                     blacklist_ini, LV_hist_df)
+                    
                     # blacklist dictionary
                     blacklist_dict = {}
                     blacklist_dict[0] = blacklist_ini
@@ -2326,10 +2781,21 @@ class ired:
                     flag = False
                     # calculate initial capacity to install
                     capacity_i = 0
+                    redo_sim = False
+                    last_blacklisted_ov = []
+                    last_blacklisted_vd = []
                     time_data = {}
+                    voltage_vals = {}
+                    overvoltage_vals = {}
                     final_der = -1
+                    
+                    report_txt.append("************************* \n") 
+                    report_txt.append("Estudio de Capacidad de Alojamiento \n") 
+                    report_txt.append("************************* \n")
+                    
+                    stop_reason = ""
 
-                    while flag is False and capacity_i <= TotalCapacityMax:
+                    while flag is False and capacity_i+DERinstalled_ini <= TotalCapacityMax:
                         # DER asignation
                         start_t_sim = time.time()
 
@@ -2341,19 +2807,23 @@ class ired:
 
                         len1 = len(list(set(temp_blacklist + blacklist)))
                         len2 = len(MV_hist_df.index)
-                        if len1 == len2 or (capacity_i >= TotalCapacityMax): 
+                        
+                        if len1 == len2 or (capacity_i + DERinstalled_ini >= TotalCapacityMax): 
                             MV_hist_df.loc[temp_blacklist, 'blacklist_info'] = np.nan
-                            msg = 'Final Checkpoint - Maximal capacity '
-                            msg += 'reached: ' + str(capacity_i - der_step)
+                            msg = 'Checkpoint Final - Máxima capacidad alcanzada: '
+                            msg += str(DERinstalled_ini + capacity_i - der_step) +" kW. \n"
+                            msg += "La razón de finalización es que no hay secundarios disponibles para alojar más DER"
+                            stop_reason = "La razón de finalización es que no hay secundarios disponibles para alojar más DER"
                             print(msg)
+                            report_txt.append(msg)
                             final_der = capacity_i - der_step
                             flag = True
 
                         else:
-                            print()
-                            msg = 'Simulation installed '
-                            msg += 'capacity: ' + str(capacity_i)
+                            msg = 'Capacidad instalada: '
+                            msg += str(capacity_i + DERinstalled_ini) + " kW \n"
                             print(msg)
+                            report_txt.append(msg)
 
                             MV_hist_df, LV_hist_df = DER_calc(capacity_i, der_step, LoadTrafos_MVLoads,
                                                             blacklist, LV_hist_df, MV_hist_df)
@@ -2366,7 +2836,7 @@ class ired:
                             trafo_df_f = pd.DataFrame()
                             DERs_LV, DERs_MV, Trafos_DERs_MV = DER_allocation_HHC(LV_hist_df, MV_hist_df,
                                                                                   mv_loads_layer,
-                                                                                  trafo_df_f)
+                                                                                  trafo_df_f, icc_ss)
                             DERs = DERs_LV + DERs_MV
 
                             # Compile model for simulation - run simulation
@@ -2376,7 +2846,7 @@ class ired:
                                     substation_type, line_tx_definition,
                                     circuit_demand, Base_V, kW_sim,
                                     kVAr_sim, DERs, Trafos_DERs_MV,
-                                    dir_network)
+                                    dir_network, reg_taps, cap_steps)
 
                             DSScircuit.setActiveElement('line.' + firstLine)
                             temp_powers = DSScircuit.ActiveElement.Powers
@@ -2389,13 +2859,17 @@ class ired:
                             # updated, with all limiting criteria characteristics being monitored
                             vect_ret =  pq_voltage(DSScircuit, DSStext, dir_network,
                                                 Base_V, loadslv_buses, loadsmv_buses,
-                                                RegDevices, capacity_i, lv_groups,
+                                                regs, caps, capacity_i, lv_groups,
                                                 tx_groups, NoDERsPF_Vbuses,
                                                 Overvoltage_loads_df, Overvoltage_rest_df,
                                                 Voltagedeviation_loads_df, Voltagedeviation_rest_df,
                                                 Voltagedeviation_reg_df, Voltageunbalance_df,
                                                 Overvoltage_analysis, VoltageDeviation_analysis,
-                                                VoltageRegulation_analysis, VoltageUnbalance)
+                                                VoltageRegulation_analysis, VoltageUnbalance, 
+                                                max_v, max_lv_dev, max_mv_dev, max_v_unb, 
+                                                redo_sim, last_blacklisted_ov, last_blacklisted_vd, voltage_vals, overvoltage_vals,
+                                                report_txt)
+                                                
                             VBuses = vect_ret[0]
                             Overvoltage_loads_df = vect_ret[1]
                             Voltagedeviation_loads_df = vect_ret[2]
@@ -2403,40 +2877,50 @@ class ired:
                             Voltagedeviation_rest_df = vect_ret[4]
                             Voltagedeviation_reg_df = vect_ret[5]
                             Voltageunbalance_df = vect_ret[6]
+                            last_blacklisted_ov = vect_ret[7]
+                            last_blacklisted_vd = vect_ret[8]
+                            voltage_vals = vect_ret[9]
+                            overvoltage_vals = vect_ret[10]
+                            report_txt = vect_ret[11]
 
                             vect_ret = thermal_Lines_Tx(DSScircuit, DSStext, normalAmpsDic,
                                                         capacity_i, line_lv_groups,
                                                         tx_groups, Thermal_loading_lines_df,
                                                         Thermal_loading_tx_df, name_file_created,
-                                                        linelvgroups, Thermal_analysis)
+                                                        linelvgroups, Thermal_analysis, report_txt)
+                                                        
                             Thermal_loading_lines_df = vect_ret[0]
                             Thermal_loading_tx_df = vect_ret[1]
                             CurrentDF = vect_ret[2]
+                            report_txt = vect_ret[3]
 
-                            FFCurrents, BFCCurrents = FF_BFC_Current(DSScircuit, DSStext,
+                            FFCurrents, BFCCurrents, report_txt = FF_BFC_Current(DSScircuit, DSStext,
                                                                     dir_network, firstLine,
-                                                                    snapshottime, snapshotdate,
+                                                                    snapshottime, snapshotdate, circuit_demand,
                                                                     kW_sim, kVAr_sim, capacity_i,
                                                                     Trafos_DERs_MV, DERs,
                                                                     No_DER_FFCurrents, FFCurrents,
                                                                     No_DER_BFCCurrents, BFCCurrents,
-                                                                    faulttypes, FF_analysis, BFC_analysis)
+                                                                    faulttypes, FF_analysis, BFC_analysis,
+                                                                    max_increase_ff, max_increase_bfc, report_txt)
 
-                            RoRCurrents = ReductionReach(DSScircuit, DSStext,
+                            RoRCurrents, report_txt = ReductionReach(DSScircuit, DSStext,
                                                         dir_network, firstLine,
                                                         snapshottime, snapshotdate,
-                                                        kW_sim, kVAr_sim, capacity_i,
+                                                        kW_sim, kVAr_sim, circuit_demand, capacity_i,
                                                         Trafos_DERs_MV, DERs,
                                                         No_DER_RoRCurrents, RoRCurrents,
-                                                        faulttypes, RoR_analysis)
+                                                        faulttypes, RoR_analysis,
+                                                        max_reduction, report_txt)
 
-                            SympatheticTripping_df = SympatheticTripping(DSStext, DSScircuit,
+                            SympatheticTripping_df, report_txt = SympatheticTripping(DSStext, DSScircuit,
                                                                         dir_network, firstLine,
                                                                         snapshotdate, snapshottime,
-                                                                        kW_sim, kVAr_sim, capacity_i,
-                                                                        Trafos_DERs_MV, DERs,
-                                                                        SympatheticTripping_analysis, faulttypes,
-                                                                        Izero_trip, SympatheticTripping_df)
+                                                                        kW_sim, kVAr_sim, circuit_demand, 
+                                                                        capacity_i, Trafos_DERs_MV, DERs,
+                                                                        SympatheticTripping_analysis, 
+                                                                        faulttypes, I_trip_51p, I_trip_51g, 
+                                                                        SympatheticTripping_df, report_txt)
 
                             new_ret = flag_and_blacklist_calc(Overvoltage_loads_df, Voltagedeviation_loads_df,
                                                             Overvoltage_rest_df, Voltagedeviation_rest_df,
@@ -2454,38 +2938,48 @@ class ired:
                             blacklist = new_ret[2]
                             blacklist_dict = new_ret[3]
                             redo_sim = new_ret[4]
+
                             end_t_sim = time.time()
                             time_data[capacity_i] = end_t_sim - start_t_sim
 
                             if flag is False:
                                 if redo_sim is False:
-                                    if capacity_i <= TotalCapacityMax:
-                                        msg = 'Checkpoint - Capacity: '
-                                        msg += str(capacity_i)
+                                    if capacity_i+DERinstalled_ini <= TotalCapacityMax:
+                                        msg = 'Checkpoint - Capacidad instalada: '
+                                        msg += str(capacity_i+DERinstalled_ini) + " kW \n"
                                         print(msg)
+                                        report_txt.append(msg)
                                         topped_tx = list(set(temp_blacklist) - set(blacklist))
                                         blacklist_dict[capacity_i] += topped_tx
                                         blacklist = list(set(blacklist + temp_blacklist))  # update
-                                        MV_hist_df.loc[topped_tx, 'blacklist_info'] = 'topped_tx'
+                                        MV_hist_df.loc[topped_tx, 'blacklist_info'] = 'Suma DER instalado igual capacidad nominal Tx'
                                         # at the end:
                                         # capacity_i += der_step
                                     else:
-                                        msg = 'Final Checkpoint - Maximal capacity '
-                                        msg += 'reached: ' + str(capacity_i-der_step)
+                                        msg = 'Checkpoint Final - La máxima capacidad instalada fue de: '
+                                        msg += str(DERinstalled_ini+capacity_i-der_step) +" kW. \n"
+                                        msg += "La razón de finalización fue que el nivel de DER en el circuito excedió la cantidad máxima especificada"
+                                        stop_reason = "La razón de finalización fue que el nivel de DER en el circuito excedió la cantidad máxima especificada"
+                                        
+                                        # Modifica el MV_hist
+                                        sum_stop_reason = "Máxima capacidad alcanzada en el circuito"
+                                        mask = MV_hist_df['blacklist_info'].apply(lambda x: not isinstance(x, str))
+                                        MV_hist_df.loc[mask, "blacklist_info"] = sum_stop_reason
+                                        
                                         print(msg)
+                                        report_txt.append(msg)
                                         final_der = capacity_i - der_step
                                         # at the end:
                                         # capacity_i += der_step
 
                                 else:
-                                    msg = 'Checkpoint - Capacity: '
-                                    msg += str(capacity_i) + '- there are voltage'
-                                    msg += '/thermic problems, the analysis will '
-                                    msg += 'be repeated by fixing the previous assigned '
-                                    msg += 'capacity on the transformers with problems '
-                                    msg += 'and reassigning the DER capacity of the iteration '
-                                    msg += 'on the transformers(secondaries) without problems '
+                                    msg = 'Checkpoint - Capacidad instalada: '
+                                    msg += str(capacity_i+DERinstalled_ini) + ' kW - existen problemas de tensión '
+                                    msg += 'o térmicos. El análisis se repetirá fijando la capacidad previa asignada en los '
+                                    msg += 'secundarios con problemas y reasignando la capacidad de DER para la iteración '
+                                    msg += 'en los secundarios sin problemas \n'
                                     print(msg)
+                                    report_txt.append(msg)
                                     MV_hist_df = MV_hist_df.drop(columns=[capacity_i])
                                     for group in LV_hist_df:
                                         LV_hist_df[group] = LV_hist_df[group].drop(columns=[capacity_i])
@@ -2493,9 +2987,10 @@ class ired:
                                     capacity_i = capacity_i - der_step
 
                             else:
-                                msg = 'Final Checkpoint - Maximal '
-                                msg += 'capacity reached: ' + str(capacity_i - der_step)
+                                msg = 'Checkpoint Final -  Máxima capacidad alcanzada:'
+                                msg += str(capacity_i + DERinstalled_ini - der_step) + " kW \n"
                                 print(msg)
+                                report_txt.append(msg)
                                 flag_list_str = ''
                                 for crit in range(len(flag_list)):
                                     if len(flag_list) == 1:
@@ -2504,102 +2999,142 @@ class ired:
                                         if crit < (len(flag_list)-2):
                                             flag_list_str += flag_list[crit] + ', '
                                         elif crit == (len(flag_list)-2):
-                                            flag_list_str += flag_list[crit] + ' and '
+                                            flag_list_str += flag_list[crit] + ' y '
                                         else:
                                             flag_list_str += flag_list[crit]
 
-                                msg = 'The ' + flag_list_str
-                                msg += ' criteria forced the simulation to stop'
+                                msg = 'Los criterios ' + flag_list_str
+                                msg += ' pararon la simulación \n '
+                                
+                                stop_reason = "Los criterios " + flag_list_str +' pararon la simulación \n '
+                                
+                                # Modifica el MV_hist
+                                sum_stop_reason = flag_list_str
+                                mask = MV_hist_df['blacklist_info'].apply(lambda x: not isinstance(x, str))
+                                MV_hist_df.loc[mask, "blacklist_info"] = "Problema MT - " + sum_stop_reason
+                                        
                                 print(msg)
+                                report_txt.append(msg)
                                 final_der = capacity_i - der_step
 
                     # Reports how many minutes the simulation took
                     end = time.time()
                     whole_sim_time = end - start
                     time_data['total'] = whole_sim_time
-                    msg = 'Simulation time: '
+                    msg = 'Tiempo de simulación: '
                     msg += str(round(whole_sim_time/60, 2))
                     msg += ' min.'
                     print(msg)
-
-                    # %% SAVE ON LAYER
-                    Voltage_comp = Overvoltage_analysis or VoltageDeviation_analysis \
-                                        or VoltageRegulation_analysis \
-                                        or VoltageUnbalance
-                    Prot_comp = FF_analysis or BFC_analysis or RoR_analysis
+                    
+                    # Crea carpeta para resultados en caso de que no exista
+                    res_ss_dir = dir_general+"\\HC_RES_SS"
+                    res_ss_crit_dir = res_ss_dir+"\\Resultados_Criterios"
+                    
+                    if not os.path.exists(res_ss_dir):
+                        os.makedirs(res_ss_dir)
+                    
+                    # Crea carpeta para resultados por criterios
+                    if not os.path.exists(res_ss_crit_dir):
+                        os.makedirs(res_ss_crit_dir)
+                        
+                    # Modify the MV_hist 
+                    print(MV_hist_df)
+                    if final_der != 0:
+                        # Get the column names that are numbers and add the initial DER installed
+                        MV_hist_df.columns = [(int(col) + DERinstalled_ini) if str(col).isnumeric() else col for col in MV_hist_df.columns]
+                        final_der = int(final_der + DERinstalled_ini) # Incluye el dato inicial
+                        tx_idxs = [x for x in list(MV_hist_df.index) if "n_MV" not in x]
+                        MV_hist_df.loc[tx_idxs,final_der] = MV_hist_df[final_der] + (MV_hist_df["Rating"] - MV_hist_df["Av_Rating"])
+                        imp_col_names = ["DSSNAME", "LV_GROUP", "Rating", "blacklist_info", final_der]
+                      
+                        MV_hist_df[imp_col_names].to_excel(res_ss_dir+'\\Resultados_Secundarios.xlsx', index=False)
+                    
+                    
 
                     for elem in MV_hist_df.index:
                         try:
                             idx_tx = tx_layer.loc[tx_layer['DSSNAME'] == elem].index.values[0]
-
-                            if lim_kVA is True:
-                                if (Voltage_comp is True and Thermal_analysis is True
-                                        and Prot_comp is True):
-                                    tx_layer.loc[idx_tx, 'HB_M-VTP'] = MV_hist_df.loc[elem, final_der]
-                                elif (Voltage_comp is True and Thermal_analysis is True
-                                        and Prot_comp is False):
-                                    tx_layer.loc[idx_tx, 'HB_M-VT'] = MV_hist_df.loc[elem, final_der]
-                                elif (Voltage_comp is True and Thermal_analysis is False
-                                        and Prot_comp is False):  # error aca
-                                    tx_layer.loc[idx_tx, 'HB_M-V'] = MV_hist_df.loc[elem, final_der]
-                            else:
-                                if (Voltage_comp is True and Thermal_analysis is True
-                                        and Prot_comp is True):
-                                    tx_layer.loc[idx_tx, 'HB_VTP'] = MV_hist_df.loc[elem, final_der]
-                                elif (Voltage_comp is True and Thermal_analysis is True
-                                        and Prot_comp is False):
-                                    tx_layer.loc[idx_tx, 'HB_VT'] = MV_hist_df.loc[elem, final_der]
-                                elif (Voltage_comp is True and Thermal_analysis is False
-                                        and Prot_comp is False):
-                                    tx_layer.loc[idx_tx, 'HB_V'] = MV_hist_df.loc[elem, final_der]
+                            tx_layer.loc[idx_tx,"HC_RES_SS"] = MV_hist_df.loc[elem, final_der]
+                            
                         except Exception:
                             pass
+                    
                     x = data_grouping(Grafo, MV_hist_df, fixed_distance, final_der,
                                       lines_mv_oh_layer_original,
-                                      lines_mv_ug_layer_original, Voltage_comp,
-                                      Thermal_analysis, Prot_comp, lim_kVA)
+                                      lines_mv_ug_layer_original, lim_kVA)
+                    
                     lines_mv_oh_layer_original = x[0]
                     lines_mv_ug_layer_original = x[1]
-                    name_col = x[2]
+                    name_col = "HC_RES_SS"
                     
                     # Caso en que hayan habido errores
                     if lines_mv_oh_layer_original.empty:
                         return None
+                    
+                    n_ranges = []  # Declare the ranges variable outside the if statements
+                    
                     if layer_mt_aer != [] and layer_mt_aer != 0:
                         self.save_dataframe(lines_mv_oh_layer_original,
                                             layer_mv_oh, name_col)
-                        self.categ_layer(lines_mv_oh_layer_original,
+                        n_ranges = self.categ_layer(lines_mv_oh_layer_original,
                                          layer_mv_oh, name_col)
-                        # lines_mv_oh_layer_original.to_csv(dir_network + "/Mt_aer.csv")
-                        # lines_mv_oh_layer_original.to_file(layer_mt_aer[0] + ".shp")
                     if layer_mt_sub != [] and layer_mt_sub != 0:
                         self.save_dataframe(lines_mv_ug_layer_original,
                                             layer_mv_ug, name_col)
-                        self.categ_layer(lines_mv_ug_layer_original,
-                                         layer_mv_ug, name_col)
-                    if layer_mt_loads != [] and layer_mt_loads != 0:
-                        self.save_dataframe(mv_loads_layer,
-                                            layer_mv_loads, name_col)
-                    MV_hist_df.to_csv(self.output + "/MV_hist_df.csv")
-                    # Se cambia el nombre de la columna
-                    MV_hist_df.rename({final_der: name_col}, axis=1, inplace=True)  # new method
-                    self.save_dataframe(MV_hist_df, layer_trafos, name_col)
+                        n_ranges2 = self.categ_layer(lines_mv_ug_layer_original,
+                                            layer_mv_ug, name_col, n_ranges)            
                     
-                    self.msg_final += "\nCapacidad final pequeña escala:\n" + str(final_der)
-                    self.msg_final += " kVA.\nLa capacidad de alojamiento está "
-                    self.msg_final += "limitada por " + str(flag_list)
-                    # Se guardan los resultados en un txt
-                    output_ = self.output + '/Resultados_ss.txt'
-                    with open(output_, 'w') as file_:
-                        file_.write(self.msg_final)
-                msg  = "Simulación finalizada exitosamente"
-                title = "Final"
-                msg += "\nLos resultados se guardaron en el siguiente "
-                msg += "directorio: " + self.output
-                QMessageBox.information(None, title, msg)
+                    MV_hist_df.rename({final_der: name_col}, axis=1, inplace=True) 
+                    self.save_dataframe(MV_hist_df, layer_trafos, name_col) # Guarda el resultado en capa
+                        
+                    msg  = "Simulación finalizada exitosamente \n"
+                    msg += "La capacidad final alcanzada fue de "+ str(final_der)+" kW \n "
+                    msg += stop_reason + " \n"
+                    msg += 'Tiempo de simulación: '
+                    msg += str(round(whole_sim_time/60, 2))
+                    msg += ' min.'
+                    msg += "\n Los resultados se guardaron en el siguiente "
+                    msg += "directorio: " + res_ss_dir
+                    title = "Final"
+                    QMessageBox.information(None, title, msg)
+                    
+                    # Guarda registro de resultados
+                    
+                    with open(res_ss_dir+'\\seguimiento_resultados.txt', 'w') as f:
+                        f.writelines("%s\n" % line for line in report_txt)
+                    
+                    with open(res_ss_dir+'\\HC_DER_LV.dss', 'w') as f:
+                        f.writelines("%s\n" % line for line in DERs_LV)
+                    
+                    with open(res_ss_dir+'\\HC_DER_MV.dss', 'w') as f:
+                        f.writelines("%s\n" % line for line in DERs_MV)
+                    
+                    #Guarda los resultados de la evaluación de cada criterio
+                    
+                    # Tensión:
+                    
+                    
+                    update_final_dataframe(Overvoltage_loads_df, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Sobretensión_Cargas.xlsx', index=False)
+                    update_final_dataframe(Overvoltage_rest_df, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Sobretensión_Lineas_Trafos.xlsx', index=False)
+                    update_final_dataframe(Voltagedeviation_loads_df, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Desviacion_Tensión_Cargas.xlsx', index=False)
+                    update_final_dataframe(Voltagedeviation_rest_df, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Desviacion_Tensión_Lineas_Trafos.xlsx', index=False)
+                    update_final_dataframe(Voltagedeviation_reg_df, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Regulación_Tensión.xlsx', index=False)
+                    update_final_dataframe(Voltageunbalance_df, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Desbalance_Tensión.xlsx', index=False)                                            
+                    
+                    # Térmicos
+                    update_final_dataframe(Thermal_loading_lines_df, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Cargabilidad_Líneas.xlsx', index=False)  
+                    update_final_dataframe(Thermal_loading_tx_df, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Cargabilidad_Trafos.xlsx', index=False)  
+                    
+                    # Protecciones
+                    update_final_dataframe(FFCurrents, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Aumento_Falla.xlsx', index=False)
+                    update_final_dataframe(BFCCurrents, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Coordinacion_FusibleRecloser.xlsx', index=False)
+                    update_final_dataframe(RoRCurrents, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Reducción_Alcance.xlsx', index=False)
+                    update_final_dataframe(SympatheticTripping_df, DERinstalled_ini, final_der).to_excel(res_ss_crit_dir+'\\Resultados-Disparo_Indebido.xlsx', index=False)
+
+        
         except Exception:
             title = "Final"
-            msg = "Simulación finalizada con errores"
+            msg = "Simulación finalizada con errores \n"
             self.print_error()
             QMessageBox.critical(None, title, msg)
             
